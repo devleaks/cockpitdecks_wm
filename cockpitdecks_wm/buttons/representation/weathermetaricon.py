@@ -27,7 +27,7 @@ from cockpitdecks.resources.iconfonts import (
 from cockpitdecks.resources.color import light_off, TRANSPARENT_PNG_COLOR
 from cockpitdecks.simulator import SimulatorData, SimulatorDataListener
 
-from .draw_animation import DrawAnimation
+from cockpitdecks.buttons.representation.draw_animation import DrawAnimation
 
 
 logger = logging.getLogger(__name__)
