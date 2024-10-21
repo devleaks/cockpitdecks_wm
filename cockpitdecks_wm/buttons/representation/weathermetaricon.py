@@ -299,7 +299,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         updated = self.weather.get("refresh-location", 10)  # minutes
         WeatherMetarIcon.MIN_UPDATE = int(updated) * 60
 
-        self.icon_color = self.weather.get("icon-color", "powderblue")
 
         # Working variables
         self.station: Station | None = None
@@ -313,6 +312,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         DrawAnimation.__init__(self, button=button)
         SimulatorDataListener.__init__(self)
 
+        self.icon_color = self.weather.get("icon-color", self.get_attribute("text-color"))
         self.speed = self.CHECK_STATION
 
     def init(self):
@@ -426,8 +426,8 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             logger.debug(f"updated  {diff} secs. ago")
 
         # If we are at the default station, we check where we are to see if we moved.
-        lat = self.button.get_simulation_data_value("sim/flightmodel/position/latitude")
-        lon = self.button.get_simulation_data_value("sim/flightmodel/position/longitude")
+        lat = self.button.get_simulator_data_value("sim/flightmodel/position/latitude")
+        lon = self.button.get_simulator_data_value("sim/flightmodel/position/longitude")
 
         if lat is None or lon is None:
             logger.warning(f"no coordinates")
@@ -593,7 +593,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             font=font,
             anchor="mm",
             align="center",
-            fill=light_off(icon_color, 0.6),
+            fill=light_off(icon_color, 0.8),
         )  # (image.width / 2, 15)
 
         # Weather Data
@@ -675,7 +675,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
     def is_day(self, sunrise: int = 5, sunset: int = 19) -> bool:
         # Uses the simulator local time
-        hours = self.button.get_simulation_data_value("sim/cockpit2/clock_timer/local_time_hours", default=12)
+        hours = self.button.get_simulator_data_value("sim/cockpit2/clock_timer/local_time_hours", default=12)
         if self.sun is not None:
             sr = self.sun.get_sunrise_time()
             ss = self.sun.get_sunset_time()
