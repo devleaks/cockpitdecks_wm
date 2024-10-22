@@ -299,7 +299,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         updated = self.weather.get("refresh-location", 10)  # minutes
         WeatherMetarIcon.MIN_UPDATE = int(updated) * 60
 
-
         # Working variables
         self.station: Station | None = None
         self.metar: Metar | None = None
