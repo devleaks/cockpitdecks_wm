@@ -5,6 +5,9 @@
 # The information these icon communicates DOES NOT come from X-Plane
 # but from external, real services.
 #
+# METAR are usually updated every 30 min at specified times.
+# Algorithm could be updated to take that into account: Update at hours+10 or hours+40
+# if not updated in the last 30 minutes. (Could be cached in file?)
 import logging
 import random
 import re
@@ -456,6 +459,18 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         else:
             logger.debug(f"Metar fetched, no Metar update for station {self.station.icao}")
         return updated
+
+    def needs_update(self) -> bool:
+        # 1. No metar
+        if self.metar is None:
+            return True
+        if self.metar.raw is None:
+            return True
+        # 2. METAR older that 30min
+
+        # 3. New METAR should be available
+
+        return False
 
     def update(self, force: bool = False) -> bool:
         """
