@@ -12,7 +12,7 @@ import logging
 import random
 import re
 from functools import reduce
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 
 from avwx import Metar, Station
 from suntime import Sun
@@ -35,7 +35,7 @@ from cockpitdecks.buttons.representation.draw_animation import DrawAnimation
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 
 # #############
 # Local constant
@@ -346,8 +346,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         self.station = Station.from_icao(icao)
         if self.station is not None:
             self.metar = Metar(self.station.icao)
-            self.metar.update()
-            self._last_updated = datetime.now()
+            # Metar created but not updated
+            # self.metar.update()
+            # self._last_updated = datetime.now()
             self.sun = Sun(self.station.latitude, self.station.longitude)
             self.button._config["label"] = icao
             if self.metar is not None and self.metar.data is not None:
@@ -630,6 +631,8 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
                 text_font = self.label_font
             if text_size is None:
                 text_size = int(image.width / 10)
+            if text_color is None:
+                 text_color = self.label_color
             font = self.get_font(text_font, text_size)
             w = inside
             p = "l"
@@ -643,7 +646,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
                     font=font,
                     anchor=p + "m",
                     align=a,
-                    fill=self.label_color,
+                    fill=text_color,
                 )  # (image.width / 2, 15)
                 h = h + il
         else:
@@ -689,7 +692,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         local = utc.astimezone(tz=tz)
         sun = self.get_sun(local)
         day = local.hour > sun[0] and local.hour < sun[1]
-        logger.debug(f"local {local}, day={str(day)} (sunrise, sunset = {sun})")
+        logger.info(f"metar: {time}, local: {local.strftime('%H%M')} {tz} ({local.utcoffset()}), day={str(day)} (sunrise, sunset = {sun})")
         return day
 
     def is_day(self, sunrise: int = 5, sunset: int = 19) -> bool:
