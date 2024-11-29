@@ -35,7 +35,7 @@ from cockpitdecks.buttons.representation.draw_animation import DrawAnimation
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
-# logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 
 # #############
 # Local constant
@@ -270,7 +270,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
     REPRESENTATION_NAME = "weather-metar"
 
     MIN_UPDATE = 600  # seconds between two station updates
-    CHECK_STATION = 5.0  # Anim runs every so often to check for movements
+    CHECK_STATION = 60.0  # Anim runs every so often to check for movements
     DEFAULT_STATION = "EBBR"  # LFBO for Airbus?
 
     PARAMETERS = {
@@ -316,6 +316,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         self.icon_color = self.weather.get("icon-color", self.get_attribute("text-color"))
         self.speed = self.CHECK_STATION
+        self._no_coord_warn = 0
 
     def init(self):
         if self._inited:
@@ -345,9 +346,10 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         self.station = Station.from_icao(icao)
         if self.station is not None:
             self.metar = Metar(self.station.icao)
+            self.metar.update()
+            self._last_updated = datetime.now()
             self.sun = Sun(self.station.latitude, self.station.longitude)
             self.button._config["label"] = icao
-            self._last_updated = datetime.now()
             if self.metar is not None and self.metar.data is not None:
                 logger.debug(f"data for {self.station.icao}")
                 self.weather_pressure.update_value(self.metar.data.altimeter.value)
@@ -432,7 +434,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         lon = self.button.get_simulator_data_value("sim/flightmodel/position/longitude")
 
         if lat is None or lon is None:
-            logger.warning(f"no coordinates")
+            if (self._no_coord_warn % 10) == 0:
+                logger.warning(f"no coordinates")
+                self._no_coord_warn = self._no_coord_warn + 1
             if self.station is None:  # If no station, attempt to suggest the default one if we find it
                 icao = self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
                 logger.warning(f"no station, getting default {icao}")
@@ -539,7 +543,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
                     if diff > WeatherMetarIcon.MIN_UPDATE:
                         updated = self.update_metar()
                     else:
-                        logger.debug(f"station {self.station.icao}, Metar does not need updating")
+                        logger.debug(f"station {self.station.icao}, Metar does not need updating (last updated at {self._last_updated})")
             except:
                 self.metar = None
                 logger.warning(f"station {self.station.icao}: Metar not updated", exc_info=True)
@@ -669,8 +673,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             return self.metar is not None and self.metar.data is not None
         return self.metar is not None and self.metar.raw is not None
 
-    def is_metar_day(self, sunrise: int = 5, sunset: int = 19) -> bool:
+    def is_metar_day(self, sunrise: int = 6, sunset: int = 18) -> bool:
         if not self.has_metar():
+            logger.debug(f"no metar, assuming day ({self.metar}, {self.metar.raw})")
             return True
         time = self.metar.raw[7:12]
         logger.debug(f"zulu {time}")
@@ -684,7 +689,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         local = utc.astimezone(tz=tz)
         sun = self.get_sun(local)
         day = local.hour > sun[0] and local.hour < sun[1]
-        logger.debug(f"local {local}, day={str(day)} {sun}")
+        logger.debug(f"local {local}, day={str(day)} (sunrise, sunset = {sun})")
         return day
 
     def is_day(self, sunrise: int = 5, sunset: int = 19) -> bool:
@@ -699,6 +704,19 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         return hours >= sr and hours <= ss
 
     def get_timezone(self):
+        # pip install timezonefinder
+        # from zoneinfo import ZoneInfo
+        # from timezonefinder import TimezoneFinder
+        #
+        tf = TimezoneFinder()
+        tzname = tf.timezone_at(lng=self.station.longitude, lat=self.station.latitude)
+        if tzname is not None:
+            logger.debug(f"timezone is {tzname}")
+            return ZoneInfo(tzname)
+        logger.debug(f"no timezone, using utc")
+        return timezone.utc
+
+    def get_sunrise_time(self):
         # pip install timezonefinder
         # from zoneinfo import ZoneInfo
         # from timezonefinder import TimezoneFinder
