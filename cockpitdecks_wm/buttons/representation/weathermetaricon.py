@@ -14,10 +14,12 @@ import re
 from functools import reduce
 from datetime import datetime, timezone, tzinfo
 
-from avwx import Metar, Station
+from avwx import Station, Metar, Taf
 from suntime import Sun
 from zoneinfo import ZoneInfo
 from timezonefinder import TimezoneFinder
+
+import pytaf
 
 from PIL import Image, ImageDraw
 
@@ -279,7 +281,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
     }
 
     def __init__(self, button: "Button"):
-        self._inited = False
         self._moved = False  # True if we get Metar for location at (lat, lon), False if Metar for default station
 
         self.use_simulation = False  # If False, use current weather METAR/TAF, else use simulator METAR and date/time; no TAF.
@@ -294,6 +295,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         self._last_updated: datetime | None = None
         self._cache = None
+        self._busy_updating = False # need this for race condition during update (anim loop)
 
         # "Animation" (refresh)
         speed = self.weather.get("refresh", 30)  # minutes, should be ~30 minutes
@@ -304,7 +306,11 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         # Working variables
         self.station: Station | None = None
+        self.sun: Sun | None = None
+
         self.metar: Metar | None = None
+        self.taf: Taf | None = None
+
         self.weather_icon: str | None = None
         self.update_position = False
 
@@ -345,10 +351,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             self.update_position = True  # will be updated
         self.station = Station.from_icao(icao)
         if self.station is not None:
-            self.metar = Metar(self.station.icao)
-            # Metar created but not updated
-            # self.metar.update()
-            # self._last_updated = datetime.now()
             self.sun = Sun(self.station.latitude, self.station.longitude)
             self.button._config["label"] = icao
             if self.metar is not None and self.metar.data is not None:
@@ -395,24 +397,22 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         Check conditions to animate the icon.
         In this case, always runs
         """
-        return self.button.on_current_page()
-
-    # def animate(self):
-    #    # self.update() # not necessary, will run in get_image_for_icon
-    #    return super().animate()
+        return self._inited and self.button.on_current_page()
 
     def simulator_data_changed(self, data: SimulatorData):
         # what if Dataref.internal_dataref_path("weather:*") change?
         if data.name != self.icao_dataref_path:
             return
         icao = data.value()
-        if icao is None or icao == "":
+        if icao is None or icao == "":  # no new station, stick or current
             return
-        if self.station is not None and icao == self.station.icao:
+        if self.station is not None and icao == self.station.icao:  # same station
             return
         self.station = Station.from_icao(icao)
-        self.sun = Sun(self.station.latitude, self.station.longitude)
+        if self.station is not None:
+            self.sun = Sun(self.station.latitude, self.station.longitude)
         self.button._config["label"] = icao
+
         # invalidate previous values
         self.metar = None
         self._cache = None
@@ -453,14 +453,29 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
     def update_metar(self, create: bool = False):
         if create:
             self.metar = Metar(self.station.icao)
+        if not self.needs_update():
+            return False
         before = self.metar.raw
         updated = self.metar.update()
         self._last_updated = datetime.now()
         if updated:
             logger.info(f"UPDATED: station {self.station.icao}, Metar updated")
-            if before != self.metar.raw and before is not None and before != "":
-                logger.info(f"{before}")
-                logger.info(f"{self.metar.raw}")
+            # remove date, etc.
+            try:
+                before1 = " ".join(before.split(" ")[2:])
+                after = " ".join(self.metar.raw.split(" ")[2:])
+                if before is not None and before != "" and before1 != after:
+                    logger.info(f"update: {before} -> {self.metar.raw}")
+            except:
+                logger.debug(f"issue parsing before/after: {before}/{self.metar.raw}")
+
+            # Display TAF in plain English on info
+            taf = Taf(self.station.icao)
+            if taf is not None:
+                taf_updated = taf.update()
+                if taf_updated and hasattr(taf, "summary"):
+                    logger.info(f"Forecast:\n+ {pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()}")
+                    # logger.info(f"Forecast:\n+ {'\n+ '.join(taf.summary)}")
         else:
             logger.debug(f"Metar fetched, no Metar update for station {self.station.icao}")
         return updated
@@ -468,13 +483,19 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
     def needs_update(self) -> bool:
         # 1. No metar
         if self.metar is None:
+            logger.debug(f"no metar")
             return True
         if self.metar.raw is None:
+            logger.debug(f"no updated metar")
             return True
         # 2. METAR older that 30min
-
-        # 3. New METAR should be available
-
+        if self._last_updated is None:
+            logger.debug(f"never updated")
+            return True
+        diff = now.timestamp() - self._last_updated.timestamp()
+        if diff > WeatherMetarIcon.MIN_UPDATE:
+            logger.debug(f"expired")
+            return True
         return False
 
     def update(self, force: bool = False) -> bool:
@@ -503,9 +524,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             try:
                 self.station = new_station
                 updated = self.update_metar(create=True)
+                updated = True  # force
                 self.sun = Sun(self.station.latitude, self.station.longitude)
                 self.button._config["label"] = new_station.icao
-                updated = True  # force
                 logger.info(f"UPDATED: new station {self.station.icao}")
             except:
                 self.metar = None
@@ -515,9 +536,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
                 old_station = self.station.icao
                 self.station = new_station
                 updated = self.update_metar(create=True)
+                updated = True  # force
                 self.sun = Sun(self.station.latitude, self.station.longitude)
                 self.button._config["label"] = new_station.icao
-                updated = True  # force
                 logger.info(f"UPDATED: station changed from {old_station} to {self.station.icao}")
             except:
                 self.metar = None
@@ -578,8 +599,13 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         """
 
         logger.debug(f"updating..")
+        if self._busy_updating:
+            logger.info(f"..updating in progress..")
+            return
+        self._busy_updating = True
         if not self.update() and self._cache is not None:
             logger.debug(f"..not updated, using cache")
+            self._busy_updating = False
             return self._cache
 
         image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
@@ -599,8 +625,8 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         final_icon = self.weather_icon
         if icon_text is None:
             logger.warning(f"weather icon '{self.weather_icon}' not found, using default ({DEFAULT_WEATHER_ICON})")
-            icon_text = WEATHER_ICONS.get(DEFAULT_WEATHER_ICON)
             final_icon = DEFAULT_WEATHER_ICON
+            icon_text = WEATHER_ICONS.get(DEFAULT_WEATHER_ICON)
             if icon_text is None:
                 logger.warning(f"default weather icon {DEFAULT_WEATHER_ICON} not found, using hardcoded default (wi_day_sunny)")
                 final_icon = "wi_day_sunny"
@@ -667,6 +693,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         self._cache = bg
 
         logger.debug(f"..updated")
+        self._busy_updating = False
         return self._cache
 
     def has_metar(self, what: str = "raw"):
@@ -678,7 +705,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
     def is_metar_day(self, sunrise: int = 6, sunset: int = 18) -> bool:
         if not self.has_metar():
-            logger.debug(f"no metar, assuming day ({self.metar}, {self.metar.raw})")
+            logger.debug("no metar, assuming day")
             return True
         time = self.metar.raw[7:12]
         logger.debug(f"zulu {time}")
