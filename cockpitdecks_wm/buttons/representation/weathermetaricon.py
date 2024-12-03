@@ -19,6 +19,8 @@ from suntime import Sun
 from zoneinfo import ZoneInfo
 from timezonefinder import TimezoneFinder
 
+# these packages have better summary/description of decoded METAR/TAF
+from metar import Metar as MetarDesc
 import pytaf
 
 from PIL import Image, ImageDraw
@@ -295,7 +297,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         self._last_updated: datetime | None = None
         self._cache = None
-        self._busy_updating = False # need this for race condition during update (anim loop)
+        self._busy_updating = False  # need this for race condition during update (anim loop)
 
         # "Animation" (refresh)
         speed = self.weather.get("refresh", 30)  # minutes, should be ~30 minutes
@@ -310,6 +312,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         self.metar: Metar | None = None
         self.taf: Taf | None = None
+        self.show = self.weather.get("summary")
 
         self.weather_icon: str | None = None
         self.update_position = False
@@ -459,23 +462,44 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         updated = self.metar.update()
         self._last_updated = datetime.now()
         if updated:
-            logger.info(f"UPDATED: station {self.station.icao}, Metar updated")
+            logger.info(f"station {self.station.icao}, Metar updated")
+            if self.show is not None:  # Display it on logging
+                if self.has_metar("raw") and self.show == "nice":
+                    obs = MetarDesc.Metar(self.metar.raw)
+                    logger.info(f"Current:\n{obs.string()}")
+                elif self.has_metar("summary"):
+                    logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
+
             # remove date, etc.
             try:
                 before1 = " ".join(before.split(" ")[2:])
                 after = " ".join(self.metar.raw.split(" ")[2:])
                 if before is not None and before != "" and before1 != after:
                     logger.info(f"update: {before} -> {self.metar.raw}")
+                #
             except:
                 logger.debug(f"issue parsing before/after: {before}/{self.metar.raw}")
 
-            # Display TAF in plain English on info
-            taf = Taf(self.station.icao)
-            if taf is not None:
-                taf_updated = taf.update()
-                if taf_updated and hasattr(taf, "summary"):
-                    logger.info(f"Forecast:\n+ {pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()}")
-                    # logger.info(f"Forecast:\n+ {'\n+ '.join(taf.summary)}")
+            if self.show is not None:  # Display TAF in plain English on info
+                taf = Taf(self.station.icao)
+                if taf is not None:
+                    taf_updated = taf.update()
+                    if taf_updated and hasattr(taf, "summary"):
+                        if self.show == "nice":
+                            taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
+                            # Split TAF in blocks of forecasts
+                            forecast = []
+                            prevision = []
+                            for line in taf_text.split("\n"):
+                                if len(line.strip()) > 0:
+                                    prevision.append(line)
+                                else:
+                                    forecast.append(prevision)
+                                    prevision = []
+                            # logger.info(f"Forecast:\n{taf_text}")
+                            logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
+                        else:
+                            logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
         else:
             logger.debug(f"Metar fetched, no Metar update for station {self.station.icao}")
         return updated
@@ -492,6 +516,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         if self._last_updated is None:
             logger.debug(f"never updated")
             return True
+        now = datetime.now()
         diff = now.timestamp() - self._last_updated.timestamp()
         if diff > WeatherMetarIcon.MIN_UPDATE:
             logger.debug(f"expired")
@@ -658,7 +683,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             if text_size is None:
                 text_size = int(image.width / 10)
             if text_color is None:
-                 text_color = self.label_color
+                text_color = self.label_color
             font = self.get_font(text_font, text_size)
             w = inside
             p = "l"
@@ -719,7 +744,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         local = utc.astimezone(tz=tz)
         sun = self.get_sun(local)
         day = local.hour > sun[0] and local.hour < sun[1]
-        logger.info(f"metar: {time}, local: {local.strftime('%H%M')} {tz} ({local.utcoffset()}), day={str(day)} (sunrise, sunset = {sun})")
+        logger.info(f"metar: {time}, local: {local.strftime('%H%M')} {tz} ({local.utcoffset()}), {'day' if day else 'night'} (sunrise {sun[0]}, sunset {sun[1]})")
         return day
 
     def is_day(self, sunrise: int = 5, sunset: int = 19) -> bool:
