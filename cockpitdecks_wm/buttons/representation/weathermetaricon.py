@@ -11,6 +11,7 @@
 import logging
 import random
 import re
+import math
 from functools import reduce
 from datetime import datetime, timezone, tzinfo
 
@@ -266,6 +267,43 @@ class WI:
         self.special = special  # 0=none, 1=fog, 2=sandstorm
 
 
+def distance(origin, destination):
+    """
+    Calculate the Haversine distance.
+
+    Parameters
+    ----------
+    origin : tuple of float
+        (lat, long)
+    destination : tuple of float
+        (lat, long)
+
+    Returns
+    -------
+    distance_in_km : float
+
+    Examples
+    --------
+    >>> origin = (48.1372, 11.5756)  # Munich
+    >>> destination = (52.5186, 13.4083)  # Berlin
+    >>> round(distance(origin, destination), 1)
+    504.2
+    """
+    lat1, lon1 = origin
+    lat2, lon2 = destination
+    radius = 6371  # km
+
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) * math.sin(dlat / 2) +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+         math.sin(dlon / 2) * math.sin(dlon / 2))
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    d = radius * c
+
+    return d
+
+
 class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
     """
     Depends on avwx-engine
@@ -273,8 +311,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
     REPRESENTATION_NAME = "weather-metar"
 
-    MIN_UPDATE = 600  # seconds between two station updates
+    MIN_UPDATE = 60.0  # seconds between two station updates
     CHECK_STATION = 60.0  # Anim runs every so often to check for movements
+    MIN_DISTANCE_MOVE_KM = 0.0  # km
     DEFAULT_STATION = "EBBR"  # LFBO for Airbus?
 
     PARAMETERS = {
@@ -299,12 +338,8 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         self._cache = None
         self._busy_updating = False  # need this for race condition during update (anim loop)
 
-        # "Animation" (refresh)
-        speed = self.weather.get("refresh", 30)  # minutes, should be ~30 minutes
-        self.speed = int(speed) * 60  # minutes
-
-        updated = self.weather.get("refresh-location", 10)  # minutes
-        WeatherMetarIcon.MIN_UPDATE = int(updated) * 60
+        refresh_location = self.weather.get("refresh-location", self.CHECK_STATION)  # minutes
+        WeatherMetarIcon.MIN_UPDATE = int(refresh_location) * 60
 
         # Working variables
         self.station: Station | None = None
@@ -323,8 +358,11 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         DrawAnimation.__init__(self, button=button)
         SimulatorDataListener.__init__(self)
 
+        # "Animation" (refresh)
+        speed = self.weather.get("refresh", 30)  # minutes, should be ~30 minutes
+        self.speed = int(speed) * 60  # minutes
+
         self.icon_color = self.weather.get("icon-color", self.get_attribute("text-color"))
-        self.speed = self.CHECK_STATION
         self._no_coord_warn = 0
 
     def init(self):
@@ -377,7 +415,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         if self.weather is not None and self.station is not None:
             ret = not self._moved and self.station.icao == self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
             logger.debug(
-                f"default station installed {self.station.icao}, {self.weather.get('station', WeatherMetarIcon.DEFAULT_STATION)}, {self._moved}, returns {ret}"
+                f"currently at {self.station.icao}, default station {self.weather.get('station', WeatherMetarIcon.DEFAULT_STATION)}, moved={self._moved}, returns {ret}"
             )
         return ret
 
@@ -429,9 +467,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             now = datetime.now()
             diff = now.timestamp() - self._last_updated.timestamp()
             if diff < WeatherMetarIcon.MIN_UPDATE:
-                logger.debug(f"updated less than {WeatherMetarIcon.MIN_UPDATE} secs. ago ({diff}), skipping..")
+                logger.debug(f"updated less than {WeatherMetarIcon.MIN_UPDATE} secs. ago ({diff}), skipping update.. ({self.speed})")
                 return None
-            logger.debug(f"updated  {diff} secs. ago")
+            logger.debug(f"updated {diff} secs. ago")
 
         # If we are at the default station, we check where we are to see if we moved.
         lat = self.button.get_simulator_data_value("sim/flightmodel/position/latitude")
@@ -439,7 +477,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         if lat is None or lon is None:
             if (self._no_coord_warn % 10) == 0:
-                logger.warning(f"no coordinates")
+                logger.warning("no coordinates")
                 self._no_coord_warn = self._no_coord_warn + 1
             if self.station is None:  # If no station, attempt to suggest the default one if we find it
                 icao = self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
@@ -449,8 +487,16 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
 
         logger.debug(f"closest station to lat={lat},lon={lon}")
         (nearest, coords) = Station.nearest(lat=lat, lon=lon, max_coord_distance=150000)
-        self._moved = True
         logger.debug(f"nearest={nearest}")
+        ## compute distance and require minimum displacment
+        dist = 0.0
+        if self.station is not None:
+            dist = distance((self.station.latitude, self.station.longitude), (lat, lon))
+            logger.info(f"moved={round(dist,3)}")
+            if dist > self.MIN_DISTANCE_MOVE_KM:
+                self._moved = True
+        else:
+            logger.debug("no station")
         return nearest
 
     def update_metar(self, create: bool = False):
@@ -463,46 +509,41 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         self._last_updated = datetime.now()
         if updated:
             logger.info(f"station {self.station.icao}, Metar updated")
-            if self.show is not None:  # Display it on logging
-                if self.has_metar("raw") and self.show == "nice":
-                    obs = MetarDesc.Metar(self.metar.raw)
-                    logger.info(f"Current:\n{obs.string()}")
-                elif self.has_metar("summary"):
-                    logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
-
-            # remove date, etc.
-            try:
-                before1 = " ".join(before.split(" ")[2:])
-                after = " ".join(self.metar.raw.split(" ")[2:])
-                if before is not None and before != "" and before1 != after:
-                    logger.info(f"update: {before} -> {self.metar.raw}")
-                #
-            except:
-                logger.debug(f"issue parsing before/after: {before}/{self.metar.raw}")
-
-            if self.show is not None:  # Display TAF in plain English on info
-                taf = Taf(self.station.icao)
-                if taf is not None:
-                    taf_updated = taf.update()
-                    if taf_updated and hasattr(taf, "summary"):
-                        if self.show == "nice":
-                            taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
-                            # Split TAF in blocks of forecasts
-                            forecast = []
-                            prevision = []
-                            for line in taf_text.split("\n"):
-                                if len(line.strip()) > 0:
-                                    prevision.append(line)
-                                else:
-                                    forecast.append(prevision)
-                                    prevision = []
-                            # logger.info(f"Forecast:\n{taf_text}")
-                            logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
-                        else:
-                            logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
+            logger.info(f"update: {before} -> {self.metar.raw}")
+            if self.show is not None:
+                self.print()
         else:
-            logger.debug(f"Metar fetched, no Metar update for station {self.station.icao}")
+            logger.info(f"station {self.station.icao}, Metar fetched, unchanged")
         return updated
+
+    def print(self):
+        # Print current situation
+        if self.has_metar("raw") and self.show == "nice":
+            obs = MetarDesc.Metar(self.metar.raw)
+            logger.info(f"Current:\n{obs.string()}")
+        elif self.has_metar("summary"):
+            logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
+
+        # Print forecast
+        taf = Taf(self.station.icao)
+        if taf is not None:
+            taf_updated = taf.update()
+            if taf_updated and hasattr(taf, "summary"):
+                if self.show == "nice":
+                    taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
+                    # Split TAF in blocks of forecasts
+                    forecast = []
+                    prevision = []
+                    for line in taf_text.split("\n"):
+                        if len(line.strip()) > 0:
+                            prevision.append(line)
+                        else:
+                            forecast.append(prevision)
+                            prevision = []
+                    # logger.info(f"Forecast:\n{taf_text}")
+                    logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
+                else:
+                    logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
 
     def needs_update(self) -> bool:
         # 1. No metar
@@ -744,7 +785,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
         local = utc.astimezone(tz=tz)
         sun = self.get_sun(local)
         day = local.hour > sun[0] and local.hour < sun[1]
-        logger.info(f"metar: {time}, local: {local.strftime('%H%M')} {tz} ({local.utcoffset()}), {'day' if day else 'night'} (sunrise {sun[0]}, sunset {sun[1]})")
+        logger.info(
+            f"metar: {time}, local: {local.strftime('%H%M')} {tz} ({local.utcoffset()}), {'day' if day else 'night'} (sunrise {sun[0]}, sunset {sun[1]})"
+        )
         return day
 
     def is_day(self, sunrise: int = 5, sunset: int = 19) -> bool:
