@@ -310,7 +310,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
     REPRESENTATION_NAME = "weather-metar"
 
     MIN_UPDATE = 60.0  # seconds between two station updates
-    CHECK_STATION = 60.0  # Anim runs every so often to check for movements
+    CHECK_STATION = 60.0  # seconds, anim runs every so often to check for movements
     MIN_DISTANCE_MOVE_KM = 0.0  # km
     DEFAULT_STATION = "EBBR"  # LFBO for Airbus?
 
