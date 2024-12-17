@@ -368,15 +368,15 @@ class WeatherMetarIcon(DrawAnimation, SimulatorDataListener):
             return
 
         # Initialize datarefs to communicate weather main parameters
-        self.weather_pressure = self.button.sim.get_internal_dataref("weather:pressure")
-        self.weather_wind_speed = self.button.sim.get_internal_dataref("weather:wind_speed")
-        self.weather_temperature = self.button.sim.get_internal_dataref("weather:temperature")
-        self.weather_dew_point = self.button.sim.get_internal_dataref("weather:dew_point")
+        self.weather_pressure = self.button.sim.get_internal_data("weather:pressure")
+        self.weather_wind_speed = self.button.sim.get_internal_data("weather:wind_speed")
+        self.weather_temperature = self.button.sim.get_internal_data("weather:temperature")
+        self.weather_dew_point = self.button.sim.get_internal_data("weather:dew_point")
 
         if self.icao_dataref_path is not None:
             # toliss_airbus/flightplan/departure_icao
             # toliss_airbus/flightplan/destination_icao
-            self.icao_dataref = self.button.sim.get_dataref(self.icao_dataref_path, is_string=True)
+            self.icao_dataref = self.button.sim.get_data(self.icao_dataref_path, is_string=True)
             self.icao_dataref.add_listener(self)  # the representation gets notified directly.
             self.simulator_data_changed(self.icao_dataref)
             self._inited = True
