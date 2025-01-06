@@ -322,9 +322,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
     def __init__(self, button: "Button"):
         self._moved = False  # True if we get Metar for location at (lat, lon), False if Metar for default station
 
-        self.use_simulation = False  # If False, use current weather METAR/TAF, else use simulator METAR and date/time; no TAF.
-        # This should be decide by a dataref in XPlane, use real weather, use real date/time.
-
         self.weather = button._config.get(self.REPRESENTATION_NAME)
         if self.weather is not None and isinstance(self.weather, dict):
             button._config["animation"] = button._config.get(self.REPRESENTATION_NAME)
@@ -500,10 +497,12 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
     def update_metar(self, create: bool = False):
         if create:
             self.metar = Metar(self.station.icao)
+            self.taf = Taf(self.station.icao)
         if not self.needs_update():
             return False
         before = self.metar.raw
         updated = self.metar.update()
+        dummy = self.taf.update()
         self._last_updated = datetime.now()
         if updated:
             logger.info(f"station {self.station.icao}, Metar updated")
@@ -523,11 +522,11 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
 
         # Print forecast
-        taf = Taf(self.station.icao)
+        taf = self.taf if self.taf is not None else Taf(self.station.icao)
         if taf is not None:
             taf_updated = taf.update()
             if taf_updated and hasattr(taf, "summary"):
-                if self.show == "nice":
+                if self.show in ["nice", "taf"]:
                     taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
                     # Split TAF in blocks of forecasts
                     forecast = []
@@ -656,11 +655,127 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         return updated
 
     def get_image_for_icon(self):
+        if self.show == "taf":
+            return self.get_taf_image_for_icon()
+        return self.get_metar_image_for_icon()
+
+    def get_metar_image_for_icon(self):
         """
         Helper function to get button image and overlay label on top of it.
         Label may be updated at each activation since it can contain datarefs.
         Also add a little marker on placeholder/invalid buttons that will do nothing.
         """
+
+        logger.debug(f"updating..")
+        if self._busy_updating:
+            logger.info(f"..updating in progress..")
+            return
+        self._busy_updating = True
+        if not self.update() and self._cache is not None:
+            logger.debug(f"..not updated, using cache")
+            self._busy_updating = False
+            return self._cache
+
+        image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
+        draw = ImageDraw.Draw(image)
+        inside = round(0.04 * image.width + 0.5)
+
+        # Weather Icon
+        icon_font = self._config.get("icon-font", WEATHER_ICON_FONT)
+        icon_size = int(image.width / 2)
+        icon_color = self.icon_color
+        font = self.get_font(icon_font, icon_size)
+        inside = round(0.04 * image.width + 0.5)
+        w = image.width / 2
+        h = image.height / 2
+        logger.debug(f"weather icon: {self.weather_icon}")
+        icon_text = WEATHER_ICONS.get(self.weather_icon)
+        final_icon = self.weather_icon
+        if icon_text is None:
+            logger.warning(f"weather icon '{self.weather_icon}' not found, using default ({DEFAULT_WEATHER_ICON})")
+            final_icon = DEFAULT_WEATHER_ICON
+            icon_text = WEATHER_ICONS.get(DEFAULT_WEATHER_ICON)
+            if icon_text is None:
+                logger.warning(f"default weather icon {DEFAULT_WEATHER_ICON} not found, using hardcoded default (wi_day_sunny)")
+                final_icon = "wi_day_sunny"
+                icon_text = "\uf00d"
+        logger.info(f"weather icon: {final_icon} ({self.speed})")
+        draw.text(
+            (w, h),
+            text=icon_text,
+            font=font,
+            anchor="mm",
+            align="center",
+            fill=light_off(icon_color, 0.8),
+        )  # (image.width / 2, 15)
+
+        # Weather Data
+        lines = None
+        try:
+            if self.has_metar("summary"):
+                lines = self.metar.summary.split(",")  # ~ 6-7 short lines
+        except:
+            lines = None
+            logger.warning(f"Metar has no summary")
+            # logger.warning(f"get_image_for_icon: Metar has no summary", exc_info=True)
+
+        if lines is not None:
+            text, text_format, text_font, text_color, text_size, text_position = self.get_text_detail(self._representation_config, "weather")
+            if text_font is None:
+                text_font = self.label_font
+            if text_size is None:
+                text_size = int(image.width / 10)
+            if text_color is None:
+                text_color = self.label_color
+            font = self.get_font(text_font, text_size)
+            w = inside
+            p = "l"
+            a = "left"
+            h = image.height / 3
+            il = text_size
+            for line in lines:
+                draw.text(
+                    (w, h),
+                    text=line.strip(),
+                    font=font,
+                    anchor=p + "m",
+                    align=a,
+                    fill=text_color,
+                )  # (image.width / 2, 15)
+                h = h + il
+        else:
+            icao = self.station.icao if self.station is not None else "no station"
+            logger.warning(f"no metar summary ({icao})")
+
+        # Paste image on cockpit background and return it.
+        bg = self.button.deck.get_icon_background(
+            name=self.button_name(),
+            width=ICON_SIZE,
+            height=ICON_SIZE,
+            texture_in=self.cockpit_texture,
+            color_in=self.cockpit_color,
+            use_texture=True,
+            who="Weather",
+        )
+        bg.alpha_composite(image)
+        self._cache = bg
+
+        logger.debug(f"..updated")
+        self._busy_updating = False
+        return self._cache
+
+    def get_taf_image_for_icon(self):
+        """
+        Helper function to get button image and overlay label on top of it.
+        Label may be updated at each activation since it can contain datarefs.
+        Also add a little marker on placeholder/invalid buttons that will do nothing.
+        """
+        bv = self.button.value
+        if bv is None:
+            bv = 0
+        else:
+            bv = int(bv)
+        bv = bv % 48.0  # hours
 
         logger.debug(f"updating..")
         if self._busy_updating:
