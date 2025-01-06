@@ -417,7 +417,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
         return ret
 
-    def get_simulator_data(self) -> set:
+    def get_simulator_variable(self) -> set:
         ret = {
             "sim/flightmodel/position/latitude",
             "sim/flightmodel/position/longitude",
