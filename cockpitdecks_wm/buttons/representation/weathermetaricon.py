@@ -14,7 +14,7 @@ import random
 import re
 import math
 from functools import reduce
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, date, timezone
 
 from avwx import Station, Metar, Taf
 from suntime import Sun
@@ -341,6 +341,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         self.station: Station | None = None
         self.sun: Sun | None = None
 
+        self.previous_metars = []
         self.metar: Metar | None = None
         self.taf: Taf | None = None
         self.show = self.weather.get("summary")
@@ -369,7 +370,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         self.text_alt_color = "grey"
         self.text_past_color = "blue"
         self.plot_inverse = "white"  # | self.icon_color
-        self.plot_text_font = "B612"
+        self.plot_text_font = "B612-Regular.ttf"
         self.plot_wmo_font = "wx_symbols.ttf"
         # for color plot (experimental)
         self.info_color = "blue"
@@ -519,10 +520,12 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         if not self.needs_update():
             return False
         before = self.metar.raw
-        updated = self.metar.update()
+        updated = self.metar.update()  # this should be the only place where the Metar/Taf gets updated
         dummy = self.taf.update()
         self._last_updated = datetime.now()
         if updated:
+            if before is not None:
+                self.previous_metars.append(before)
             logger.info(f"station {self.station.icao}, Metar updated")
             logger.info(f"update: {before} -> {self.metar.raw}")
             if self.show is not None:
@@ -530,6 +533,37 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         else:
             logger.info(f"station {self.station.icao}, Metar fetched, unchanged")
         return updated
+
+    # Time-related Metars
+    # Past
+    def is_metar_valid(self, metar: str) -> bool:
+        try:
+            m = Metar.from_report(report=metar, issued=date.today())
+            return True
+        except:
+            logger.warning(f"invalid metar {metar}", exc_info=True)
+        return False
+
+    def get_utc(self, metar: str) -> bool:
+        try:
+            m = Metar.from_report(metar)
+            t = m.data.time  # !! this is a special AVWX Timestamp class, not python standard Timestamp !!
+            if t is not None:
+                return t.dt
+            return None
+        except:
+            logger.warning(f"invalid metar {metar}", exc_info=True)
+        return None
+
+    def get_metar_for(self, icao: str) -> list:
+        return filter(lambda m: m.startswith(icao), self.previous_metars)
+
+    def get_older_metar(self, icao: str) -> list:
+        candidates = self.get_metar_for(icao=icao)
+
+    # Future
+    def get_taf_for(self, icao: str) -> list:
+        return filter(lambda m: m.startswith(icao), self.previous_tafs)
 
     def print(self):
         # Print current situation
@@ -890,34 +924,15 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         self._busy_updating = False
         return self._cache
 
-    def get_surface_station_plot_image_for_icon(self):
-        # See:
-        # https://geo.libretexts.org/Bookshelves/Meteorology_and_Climate_Science/Practical_Meteorology_(Stull)/09%3A_Weather_Reports_and_Map_Analysis/9.02%3A_Synoptic_Weather_Maps
-        # https://en.wikipedia.org/wiki/Station_model
+    def has_trend(self) -> bool:
+        if len(self.previous_metars) > 0 and self.metar is not None and hasattr(self.metar, "raw"):
+            last = self.previous_metars[-1]
+            if last is None:
+                return False
+            return last[:4] == self.metar.raw[:4]  # same station
+        return False
 
-        logger.setLevel(logging.DEBUG)
-        image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
-        draw = ImageDraw.Draw(image)
-
-        PLOT_SIZE = ICON_SIZE  # 100% fit icon
-        inside = round(0.04 * image.width + 0.5)
-        S12 = int(PLOT_SIZE / 2)  # half the size, the middle
-
-        cellsize = int(PLOT_SIZE / 5)
-        textfont = self.get_font(self.plot_text_font, int(PLOT_SIZE / 11))
-        textfont_small = self.get_font(self.plot_text_font, int(PLOT_SIZE / 13))
-        wmofont = self.get_font(self.plot_wmo_font, int(PLOT_SIZE / 7))
-        wmofont_small = self.get_font(self.plot_wmo_font, int(PLOT_SIZE / 11))
-
-        def pd(s):
-            logger.debug("*" * 30 + s)
-
-        def cell(x, y):
-            return (
-                cellsize * (x - 0.5),
-                cellsize * (y - 0.5),
-            )
-
+    def collect_station_plot_data(self) -> dict:
         # #########################
         # Information/value collection procedures
         #
@@ -958,8 +973,15 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         def get_plot_low_clouds_height():
             return random.random() * 3000  # ft?
 
+        def get_plot_waves():
+            return (random.random() * 5, random.random() * 30)
+
         def get_plot_wind():
-            return (random.random() * 120, random.random() * 360)  # kn?
+            return (
+                random.random() * 120,
+                random.random() * 360 if random.random() > 0.5 else None,
+                random.random() * 80 if random.random() > 0.5 else None,
+            )
 
         # right:
         def get_plot_pressure():
@@ -1004,21 +1026,144 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         def is_past_hour_and_now():
             return random.random() > 0.5
 
-        def is_dscreased_past_hour_occuring_now():
+        def is_decreased_past_hour_occuring_now():
             return random.random() > 0.5
+
+        # #########################
+        # Information/value collection procedures
+        #
+        is_valid = self.is_metar_valid(metar=self.metar.raw)
+        if is_valid:
+            utc = self.get_utc(metar=self.metar.raw)
+            logger.info(f"METAR: {self.metar.raw}, utc={utc}")
+        no = "" if self.has_trend() else "no "
+        logger.info(f"has {no}trend")
+
+        logger.warning("using random weather for station plot display")
+        station_plot_data = {
+            "temperature": get_plot_temperature(),
+            "visibility": get_plot_visibility(),
+            "current_weather_code": get_plot_current_weather_code(),
+            "dew_point": get_plot_dew_point(),
+            "sea_surface": get_plot_sea_surface(),
+            "waves": get_plot_waves(),
+            "high_clouds": get_plot_high_clouds(),
+            "mid_clouds": get_plot_middle_clouds(),
+            "sky_cover": get_plot_total_sky_cover(),
+            "low_clouds": get_plot_low_clouds(),
+            "low_clouds_cover": get_plot_low_clouds_cover(),
+            "low_clouds_base_m": get_plot_low_clouds_height(),
+            "wind": get_plot_wind(),  # kn?
+            "pressure": get_plot_pressure(),
+            "pressure_change": get_plot_pressure_change(),
+            "pressure_trend": get_plot_pressure_change_trend(),
+            "past_weather_code": get_plot_past_weather_code(),
+            "past_precipitations": get_plot_precipitation_last_time(),
+            "forecast_precipitations": get_plot_six_hour_precipitation_forewast(),
+            "vicinity": is_vicinity(),
+            "intensity": get_intensity(),
+            "virga": is_virga(),
+            "past_hour_not_now": is_past_hour_not_now(),
+            "past_hour_and_now": is_past_hour_and_now(),
+            "decreased_past_hour_occuring_now": is_decreased_past_hour_occuring_now(),
+            "obs_utc": get_plot_obs_utc(),
+        }
+
+        # def random_weather():
+        #     weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
+        #     codes = wx_code_to_numeric(weather)
+        #     # print(">>>", weather, codes)
+        #     return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
+        # station_plot_data = {
+        #     "temperature": random.random() * 50 - 15,
+        #     "visibility": random.random() * 120,
+        #     "current_weather_code": random_weather(),
+        #     "dew_point": -5 + random.random() * 10,
+        #     "sea_surface": 10 + random.random() * 10,
+        #     "waves": (random.random() * 5, random.random() * 30),
+        #     "high_clouds": random.random() * len(high_clouds),
+        #     "mid_clouds": random.random() * len(mid_clouds),
+        #     "sky_cover": random.random(),
+        #     "low_clouds": random.random() * len(low_clouds),
+        #     "low_clouds_cover": random.random(),
+        #     "low_clouds_base_m": random.random() * 3000,
+        #     "wind": (
+        #         random.random() * 120,
+        #         random.random() * 360 if random.random() > 0.5 else None,
+        #         random.random() * 80 if random.random() > 0.5 else None,
+        #     ),  # kn?
+        #     "pressure": 975 + random.random() * 60,
+        #     "pressure_change": -2 + random.random() * 4,
+        #     "pressure_trend": random.random() * len(pressure_tendency),
+        #     "past_weather_code": random_weather(),
+        #     "past_precipitations": (random.random() * 2, random.random() * 5),
+        #     "forecast_precipitations": (random.random() * 2, random.random() * 5),
+        #     "vicinity": random.random() > 0.5,
+        #     "intensity": random.choice(["light", "moderate", "heavy"]),
+        #     "virga": random.random() > 0.5,
+        #     "past_hour_not_now": random.random() > 0.5,
+        #     "past_hour_and_now": random.random() > 0.5,
+        #     "decreased_past_hour_occuring_now": random.random() > 0.5,
+        #     "obs_utc": datetime.now(),
+        # }
+        return station_plot_data
+
+    def get_surface_station_plot_image_for_icon(self):
+        # See:
+        # https://geo.libretexts.org/Bookshelves/Meteorology_and_Climate_Science/Practical_Meteorology_(Stull)/09%3A_Weather_Reports_and_Map_Analysis/9.02%3A_Synoptic_Weather_Maps
+        # https://en.wikipedia.org/wiki/Station_model
+
+        if not self.update() and self._cache is not None:
+            logger.debug(f"..not updated, using cache")
+            self._busy_updating = False
+            return self._cache
+
+        logger.setLevel(logging.DEBUG)
+        image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
+
+        if not self.has_metar():
+            logger.warning(f"no metar")
+            self._cache = image
+            self._busy_updating = False
+            return self._cache
+
+        draw = ImageDraw.Draw(image)
+
+        PLOT_SIZE = ICON_SIZE  # 100% fit icon
+        inside = round(0.04 * image.width + 0.5)
+        S12 = int(PLOT_SIZE / 2)  # half the size, the middle
+
+        cellsize = int(PLOT_SIZE / 5)
+        textfont = self.get_font(self.plot_text_font, int(PLOT_SIZE / 10))
+        textfont_small = self.get_font(self.plot_text_font, int(PLOT_SIZE / 12))
+        wmofont = self.get_font(self.plot_wmo_font, int(PLOT_SIZE / 7))
+        wmofont_small = self.get_font(self.plot_wmo_font, int(PLOT_SIZE / 11))
+
+        def pd(s):
+            # logger.debug("*" * 30 + s)
+            pass
+
+        def cell_center(x, y):
+            return (
+                cellsize * (x - 0.5),
+                cellsize * (y - 0.5),
+            )
+
+        station_plot_data = self.collect_station_plot_data()
 
         # #########################
         # DRAW procedure
         #
         # left:
+        #
         def draw_temperature():
-            temp = get_plot_temperature()
+            temp = station_plot_data["temperature"]
             if temp is None:
                 return
             text = f"{round(temp, 1):4.1f}"
             pd(f"draw_temperature: {temp}, {text}")
             draw.text(
-                cell(2, 2),
+                cell_center(2, 2),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1027,7 +1172,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_visibility():
-            vis = get_plot_visibility()
+            vis = station_plot_data["visibility"]
             if vis is None:
                 return
             viscode = vis
@@ -1040,7 +1185,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             text = str(round(viscode))
             pd(f"draw_visibility: {vis}, {viscode}, {text}")
             draw.text(
-                cell(1, 3),
+                cell_center(1, 3),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1049,17 +1194,17 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_current_weather_code():
-            code = get_plot_current_weather_code()
+            code = station_plot_data["current_weather_code"]
             if code is None:
                 return
             pd(f"draw_current_weather_code: {code}, {int(code)}, {len(current_weather)}")
             text = current_weather.alt_char(code=int(code), alt=0)
-            pd(f"draw_current_weather_code: {code}, {len(current_weather)}, {text}")
+            pd(f"draw_current_weather_code: {code}, {int(code)}, {len(current_weather)}, {text}")
             if text is None:
-                logger.warning(f"current_weather: {code} leads to invalid character")
+                logger.warning(f"current_weather: {int(code)} leads to invalid character")
                 return
             draw.text(
-                cell(2, 3),
+                cell_center(2, 3),
                 text=text,
                 font=wmofont,
                 anchor="mm",
@@ -1068,13 +1213,13 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_dew_point():
-            temp = get_plot_dew_point()
+            temp = station_plot_data["dew_point"]
             if temp is None:
                 return
             text = f"{round(temp, 1):4.1f}"
             pd(f"draw_dew_point: {temp}, {text}")
             draw.text(
-                cell(2, 4),
+                cell_center(2, 4),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1083,13 +1228,13 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_sea_surface():
-            temp = get_plot_sea_surface()
+            temp = station_plot_data["sea_surface"]
             if temp is None:
                 return
             text = f"{round(temp, 1):4.1f}"
             pd(f"draw_sea_surface: {temp}, {text}")
             draw.text(
-                cell(2, 5),
+                cell_center(2, 5),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1097,9 +1242,11 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 fill=self.text_alt_color,
             )
 
+        #
         # center:
+        #
         def draw_high_clouds():
-            clouds = get_plot_high_clouds()
+            clouds = station_plot_data["high_clouds"]
             if clouds is None:
                 return
             pd(f"draw_high_clouds: {clouds}, {len(high_clouds)}")
@@ -1109,7 +1256,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 logger.warning(f"high_clouds code {clouds} leads to invalid character")
                 return
             draw.text(
-                cell(3, 1),
+                cell_center(3, 1),
                 text=text,
                 font=wmofont,
                 anchor="mm",
@@ -1118,17 +1265,17 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_middle_clouds():
-            clouds = get_plot_middle_clouds()
+            clouds = station_plot_data["mid_clouds"]
             if clouds is None:
                 return
-            pd(f"draw_middle_clouds: {clouds}, {len(mid_clouds)}")
+            pd(f"draw_middle_clouds: {clouds}, {int(clouds)}, {len(mid_clouds)}")
             text = mid_clouds.alt_char(code=int(clouds), alt=0)
-            pd(f"draw_middle_clouds: {clouds}, {text}")
+            pd(f"draw_middle_clouds: {clouds}, {int(clouds)}, {text}")
             if text is None:
-                logger.warning(f"mid_clouds code {clouds} leads to invalid character")
+                logger.warning(f"mid_clouds code {int(clouds)} leads to invalid character")
                 return
             draw.text(
-                cell(3, 2),
+                cell_center(3, 2),
                 text=text,
                 font=wmofont,
                 anchor="mm",
@@ -1137,7 +1284,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_total_sky_cover():
-            coverage = get_plot_total_sky_cover()
+            coverage = station_plot_data["sky_cover"]
             radius = int(PLOT_SIZE / 12)
             width = 3
             bbox = (S12 - radius, S12 - radius, S12 + radius, S12 + radius)
@@ -1170,10 +1317,10 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 draw.line([(S12, S12 - radius), (S12, S12 + radius)], width=2 * width, fill=self.plot_inverse)
 
         def draw_low_clouds():
-            thiscell = cell(3, 4)
+            thiscell = cell_center(3, 4)
             shift = 16
             # 1. Cloud type
-            clouds = get_plot_low_clouds()
+            clouds = station_plot_data["low_clouds"]
             if clouds is None:
                 return
             pd(f"draw_low_clouds: {clouds}, {len(low_clouds)}")
@@ -1182,16 +1329,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             if text is None:
                 logger.warning(f"low_clouds code {clouds} leads to invalid character")
                 return
-            draw.text(
-                (thiscell[0] - shift, thiscell[1] - int(shift/2)),
-                text=text,
-                font=wmofont_small,
-                anchor="mm",
-                align="center",
-                fill=self.text_color
-            )
+            draw.text((thiscell[0] - shift, thiscell[1] - int(shift / 2)), text=text, font=wmofont_small, anchor="mm", align="center", fill=self.text_color)
             # 2. Cloud coverage (/8)
-            coverage = get_plot_low_clouds_cover()
+            coverage = station_plot_data["low_clouds_cover"]
             if coverage is None:
                 return
             covidx = int(coverage / 0.125) + 1
@@ -1201,16 +1341,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             if text is None:
                 logger.warning(f"sky_cover code {covidx} leads to invalid character")
                 return
-            draw.text(
-                (thiscell[0] + shift, thiscell[1] - int(shift/2)),
-                text=text,
-                font=wmofont_small,
-                anchor="mm",
-                align="center",
-                fill=self.text_color
-            )
+            draw.text((thiscell[0] + shift, thiscell[1] - int(shift / 2)), text=text, font=wmofont_small, anchor="mm", align="center", fill=self.text_color)
             # 3. Low cloud base height (in flight level)
-            height = get_plot_low_clouds_height()
+            height = station_plot_data["low_clouds_base_m"]
             if height is None:
                 return
             text = 0
@@ -1234,20 +1367,12 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 text = 9
             text = str(text)
             pd(f"draw_low_clouds/height: {height}, {text}")
-            draw.text(
-                (thiscell[0], thiscell[1] + shift),
-                text=text,
-                font=textfont,
-                anchor="mm",
-                align="center",
-                fill=self.text_color
-            )
+            draw.text((thiscell[0], thiscell[1] + shift), text=text, font=textfont, anchor="mm", align="center", fill=self.text_color)
 
         def draw_wind_barbs():
-            speed, direction = get_plot_wind()
+            speed, direction, gust = station_plot_data["wind"]
             # rounds direction to quarter cardinals N-NE
             steps = 22.5  # °
-            direction = steps * round(direction / steps)
 
             pd(f"draw_wind_barbs: speed {round(speed, 1)}, {round(direction, 1) if direction is not None else '---'}")
             wind_image = Image.new(mode="RGBA", size=(PLOT_SIZE, PLOT_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
@@ -1302,6 +1427,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                     totspeed = totspeed - 5
 
                 if direction is not None:
+                    direction = steps * round(direction / steps)
                     wind_image = wind_image.rotate(angle=direction + 180)
                 else:
                     wind_image = wind_image.rotate(angle=90)
@@ -1314,20 +1440,46 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                     f = -int(15 * PLOT_SIZE / 32)  # up/down, y
                     wind_image = wind_image.transform(image.size, Image.AFFINE, (a, b, c, d, e, f))
 
+            if gust is not None:
+                text = f"{round(gust):3d}"
+                pd(f"draw_wind_barbs: gust: {gust}, {text}")
+                if direction is not None:
+                    x = S12 + (barlength + 4) * math.sin(math.radians(direction + 180))
+                    y = S12 + (barlength + 4) * math.cos(math.radians(direction + 180))
+                else:  # not correct
+                    x = PLOT_SIZE - int(PLOT_SIZE / 4)
+                    y = PLOT_SIZE - int(PLOT_SIZE / 16)
+                draw.text((x, y), text=text, font=textfont_small, anchor="mm", align="center", fill="red")  # self.text_color,
+
             image.alpha_composite(wind_image)
 
         def draw_waves():
-            pass
+            wave, period = station_plot_data["waves"]
+            if wave is None or period is None:
+                pd(f"draw_waves: no info")
+                return
+            text = f"{round(wave, 1):4.1f}\n{round(period, 1):4.1f}"
+            pd(f"draw_waves: {wave}, {period}, {text}")
+            draw.text(
+                cell_center(3, 5),
+                text=text,
+                font=textfont_small,
+                anchor="mm",
+                align="center",
+                fill=self.text_alt_color,
+            )
 
+        #
         # right:
+        #
         def draw_pressure():
-            press = get_plot_pressure()
+            press = station_plot_data["pressure"]
             if press is None:
                 return
             text = str(int(round(press * 10, 0)))[-3:]  # decaPascal, not HectoPascal
             pd(f"draw_pressure: {press}, {str(int(round(press, 1)))}, {text}")
             draw.text(
-                cell(4, 2),
+                cell_center(4, 2),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1336,7 +1488,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_pressure_change():
-            press = get_plot_pressure_change()
+            press = station_plot_data["pressure_change"]
             if press is None:
                 return
             # if press == 0:
@@ -1344,7 +1496,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             text = str(int(round(press * 10, 0)))[-3:]  # decaPascal, not HectoPascal
             pd(f"draw_pressure_change: {press}, {str(int(round(press, 1)))}, {text}")
             draw.text(
-                cell(4, 3),
+                cell_center(4, 3),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1353,7 +1505,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_pressure_change_trend():
-            code = get_plot_pressure_change_trend()
+            code = station_plot_data["pressure_trend"]
             if code is None:
                 return
             # text = "\uE908"
@@ -1362,7 +1514,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             pd(f"draw_pressure_change_trend: {code}, {text}")
             if text != "":
                 draw.text(
-                    cell(5, 3),
+                    cell_center(5, 3),
                     text=text,
                     font=wmofont,
                     anchor="mm",
@@ -1371,13 +1523,13 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 )
 
         def draw_obs_utc():
-            press = get_plot_obs_utc()
+            press = station_plot_data["obs_utc"]
             if press is None:
                 return
             text = press.strftime("%H:%M")
             pd(f"draw_obs_utc: {press.isoformat()}, {text}")
             draw.text(
-                cell(5, 4),
+                cell_center(5, 4),
                 text=text,
                 font=textfont_small,
                 anchor="mm",
@@ -1386,7 +1538,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_past_weather_code():
-            code = get_plot_past_weather_code()
+            code = station_plot_data["past_weather_code"]
             if code is None:
                 pd("draw_past_weather_code: no code")
                 return
@@ -1399,7 +1551,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             pd(f"draw_past_weather_code: {code}, {text}")
             if text != "":
                 draw.text(
-                    cell(4, 4),
+                    cell_center(4, 4),
                     text=text,
                     font=wmofont,
                     anchor="mm",
@@ -1408,7 +1560,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 )
 
         def draw_precipitation_last_time():
-            prec, lasttime = get_plot_precipitation_last_time()
+            prec, lasttime = station_plot_data["past_precipitations"]
             if prec is None:
                 return
             if prec == 0:
@@ -1416,7 +1568,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             text = f"{round(prec)}/{round(lasttime)}"
             pd(f"draw_precipitation_last_time: {prec}, {lasttime}, {text}")
             draw.text(
-                cell(4, 5),
+                cell_center(4, 5),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1425,7 +1577,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             )
 
         def draw_six_hour_precipitation_forecast():
-            prec, forecast = get_plot_six_hour_precipitation_forewast()
+            prec, forecast = station_plot_data["forecast_precipitations"]
             if prec is None:
                 return
             if prec == 0:
@@ -1433,7 +1585,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             text = f"{round(prec)}/{round(forecast)}"
             pd(f"draw_precipitation_last_time: {prec}, {forecast}, {text}")
             draw.text(
-                cell(5, 5),
+                cell_center(5, 5),
                 text=text,
                 font=textfont,
                 anchor="mm",
@@ -1441,6 +1593,12 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
                 fill=self.text_color,
             )
 
+        # #########################
+        # DRAW!
+        #
+        # center, ~base
+        draw_wind_barbs()
+        draw_total_sky_cover()
         # left
         draw_temperature()
         draw_visibility()
@@ -1450,10 +1608,8 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         # center
         draw_high_clouds()
         draw_middle_clouds()
-        draw_total_sky_cover()
         draw_low_clouds()
         draw_waves()
-        draw_wind_barbs()
         # right
         draw_pressure()
         draw_pressure_change()
@@ -1466,20 +1622,21 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         # Paste image on cockpit background and return it.
         bg = self.button.deck.get_icon_background(
             name=self.button_name(),
-            width=PLOT_SIZE,
-            height=PLOT_SIZE,
+            width=ICON_SIZE,
+            height=ICON_SIZE,
             texture_in=self.cockpit_texture,
             color_in=self.cockpit_color,
             use_texture=True,
             who="Weather",
         )
         bg.alpha_composite(image)
-        self._cache = bg
 
         logger.debug(f"..plot updated")
         logger.setLevel(logging.INFO)
         self._busy_updating = False
-        return self._cache
+        # self._cache = bg
+        # return self._cache
+        return bg  # for debugging purpose
 
     def has_metar(self, what: str = "raw"):
         if what == "summary":
