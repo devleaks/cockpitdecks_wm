@@ -27,7 +27,7 @@ import pytaf
 
 from PIL import Image, ImageDraw
 
-from cockpitdecks import ICON_SIZE, to_fl
+from cockpitdecks import ICON_SIZE
 from cockpitdecks.resources.iconfonts import (
     WEATHER_ICONS,
     WEATHER_ICON_FONT,
@@ -341,9 +341,10 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         self.station: Station | None = None
         self.sun: Sun | None = None
 
-        self.previous_metars = []
         self.metar: Metar | None = None
+        self.previous_metars = []
         self.taf: Taf | None = None
+        self.previous_tafs = []
         self.show = self.weather.get("summary")
 
         self.weather_icon: str | None = None
@@ -424,15 +425,9 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={self._last_updated}")
         self._inited = True
 
-    def at_default_station(self):
-        ret = True
-        if self.weather is not None and self.station is not None:
-            ret = not self._moved and self.station.icao == self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
-            logger.debug(
-                f"currently at {self.station.icao}, default station {self.weather.get('station', WeatherMetarIcon.DEFAULT_STATION)}, moved={self._moved}, returns {ret}"
-            )
-        return ret
-
+    # #############################################
+    # Cockpitdecks Representation interface
+    #
     def get_simulator_variable(self) -> set:
         ret = {
             "sim/flightmodel/position/latitude",
@@ -473,239 +468,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         self._cache = None
         self.update(force=True)
 
-    def get_station(self):
-        if not self.update_position:
-            return None
-
-        if self._last_updated is not None and not self.at_default_station():
-            now = datetime.now()
-            diff = now.timestamp() - self._last_updated.timestamp()
-            if diff < WeatherMetarIcon.MIN_UPDATE:
-                logger.debug(f"updated less than {WeatherMetarIcon.MIN_UPDATE} secs. ago ({diff}), skipping update.. ({self.speed})")
-                return None
-            logger.debug(f"updated {diff} secs. ago")
-
-        # If we are at the default station, we check where we are to see if we moved.
-        lat = self.button.get_simulator_variable_value("sim/flightmodel/position/latitude")
-        lon = self.button.get_simulator_variable_value("sim/flightmodel/position/longitude")
-
-        if lat is None or lon is None:
-            if (self._no_coord_warn % 10) == 0:
-                logger.warning("no coordinates")
-                self._no_coord_warn = self._no_coord_warn + 1
-            if self.station is None:  # If no station, attempt to suggest the default one if we find it
-                icao = self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
-                logger.warning(f"no station, getting default {icao}")
-                return Station.from_icao(icao)
-            return None
-
-        logger.debug(f"closest station to lat={lat},lon={lon}")
-        (nearest, coords) = Station.nearest(lat=lat, lon=lon, max_coord_distance=150000)
-        logger.debug(f"nearest={nearest}")
-        ## compute distance and require minimum displacment
-        dist = 0.0
-        if self.station is not None:
-            dist = distance((self.station.latitude, self.station.longitude), (lat, lon))
-            logger.info(f"moved={round(dist,3)}")
-            if dist > self.MIN_DISTANCE_MOVE_KM:
-                self._moved = True
-        else:
-            logger.debug("no station")
-        return nearest
-
-    def update_metar(self, create: bool = False):
-        if create:
-            self.metar = Metar(self.station.icao)
-            self.taf = Taf(self.station.icao)
-        if not self.needs_update():
-            return False
-        before = self.metar.raw
-        updated = self.metar.update()  # this should be the only place where the Metar/Taf gets updated
-        dummy = self.taf.update()
-        self._last_updated = datetime.now()
-        if updated:
-            if before is not None:
-                self.previous_metars.append(before)
-            logger.info(f"station {self.station.icao}, Metar updated")
-            logger.info(f"update: {before} -> {self.metar.raw}")
-            if self.show is not None:
-                self.print()
-        else:
-            logger.info(f"station {self.station.icao}, Metar fetched, unchanged")
-        return updated
-
-    # Time-related Metars
-    # Past
-    def is_metar_valid(self, metar: str) -> bool:
-        try:
-            m = Metar.from_report(report=metar, issued=date.today())
-            return True
-        except:
-            logger.warning(f"invalid metar {metar}", exc_info=True)
-        return False
-
-    def get_utc(self, metar: str) -> bool:
-        try:
-            m = Metar.from_report(metar)
-            t = m.data.time  # !! this is a special AVWX Timestamp class, not python standard Timestamp !!
-            if t is not None:
-                return t.dt
-            return None
-        except:
-            logger.warning(f"invalid metar {metar}", exc_info=True)
-        return None
-
-    def get_metar_for(self, icao: str) -> list:
-        return filter(lambda m: m.startswith(icao), self.previous_metars)
-
-    def get_older_metar(self, icao: str) -> list:
-        candidates = self.get_metar_for(icao=icao)
-
-    # Future
-    def get_taf_for(self, icao: str) -> list:
-        return filter(lambda m: m.startswith(icao), self.previous_tafs)
-
-    def print(self):
-        # Print current situation
-        if self.has_metar("raw") and self.show == "nice":
-            obs = MetarDesc.Metar(self.metar.raw)
-            logger.info(f"Current:\n{obs.string()}")
-        elif self.has_metar("summary"):
-            logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
-
-        # Print forecast
-        taf = self.taf if self.taf is not None else Taf(self.station.icao)
-        if taf is not None:
-            taf_updated = taf.update()
-            if taf_updated and hasattr(taf, "summary"):
-                if self.show in ["nice", "taf"]:
-                    taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
-                    # Split TAF in blocks of forecasts
-                    forecast = []
-                    prevision = []
-                    for line in taf_text.split("\n"):
-                        if len(line.strip()) > 0:
-                            prevision.append(line)
-                        else:
-                            forecast.append(prevision)
-                            prevision = []
-                    # logger.info(f"Forecast:\n{taf_text}")
-                    logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
-                else:
-                    logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
-
-    def needs_update(self) -> bool:
-        # 1. No metar
-        if self.metar is None:
-            logger.debug(f"no metar")
-            return True
-        if self.metar.raw is None:
-            logger.debug(f"no updated metar")
-            return True
-        # 2. METAR older that 30min
-        if self._last_updated is None:
-            logger.debug(f"never updated")
-            return True
-        now = datetime.now()
-        diff = now.timestamp() - self._last_updated.timestamp()
-        if diff > WeatherMetarIcon.MIN_UPDATE:
-            logger.debug(f"expired")
-            return True
-        return False
-
-    def update(self, force: bool = False) -> bool:
-        """
-        Creates or updates Metar. Call to avwx may fail, so it is wrapped into try/except block
-
-        :param    force:  The force
-        :type      force:  bool
-
-        :returns:   { description_of_the_return_value }
-        :rtype:  bool
-        """
-        self.inc("update")
-
-        updated = False
-        if force:
-            self._last_updated = None
-
-        new_station = self.get_station()
-
-        if new_station is None:
-            if self.station is None:
-                return updated  # no new station, no existing station, we leave it as it is
-
-        if self.station is None:
-            try:
-                self.station = new_station
-                updated = self.update_metar(create=True)
-                updated = True  # force
-                self.sun = Sun(self.station.latitude, self.station.longitude)
-                self.button._config["label"] = new_station.icao
-                logger.info(f"UPDATED: new station {self.station.icao}")
-            except:
-                self.metar = None
-                logger.warning(f"new station {new_station.icao}: Metar not created", exc_info=True)
-        elif new_station is not None and new_station.icao != self.station.icao:
-            try:
-                old_station = self.station.icao
-                self.station = new_station
-                updated = self.update_metar(create=True)
-                updated = True  # force
-                self.sun = Sun(self.station.latitude, self.station.longitude)
-                self.button._config["label"] = new_station.icao
-                logger.info(f"UPDATED: station changed from {old_station} to {self.station.icao}")
-            except:
-                self.metar = None
-                logger.warning(f"change station to {new_station.icao}: Metar not created", exc_info=True)
-        elif self.metar is None:  # create it the first time
-            try:
-                updated = self.update_metar(create=True)
-                updated = True  # force
-                logger.info(f"UPDATED: station {self.station.icao}, first Metar")
-            except:
-                self.metar = None
-                logger.warning(
-                    f"station {self.station.icao}, first Metar not created",
-                    exc_info=True,
-                )
-        else:
-            try:
-                now = datetime.now()
-                if self._last_updated is None:
-                    updated = self.update_metar()
-                    logger.debug(f"station {self.station.icao}, Metar collected")
-                else:
-                    diff = now.timestamp() - self._last_updated.timestamp()
-                    if diff > WeatherMetarIcon.MIN_UPDATE:
-                        updated = self.update_metar()
-                    else:
-                        logger.debug(f"station {self.station.icao}, Metar does not need updating (last updated at {self._last_updated})")
-            except:
-                self.metar = None
-                logger.warning(f"station {self.station.icao}: Metar not updated", exc_info=True)
-
-        # if new is None, we leave it as it is
-        if updated and self.station is not None:
-            # AVWX's Metar is not as comprehensive as python-metar's Metar...
-            if self.has_metar("data"):
-                logger.debug(f"data for {self.station.icao}")
-                self.weather_pressure.update_value(self.metar.data.altimeter.value)
-                logger.debug(f"pressure {self.metar.data.altimeter.value}")
-                self.weather_wind_speed.update_value(self.metar.data.wind_speed.value)
-                logger.debug(f"wind speed {self.metar.data.wind_speed.value}")
-                self.weather_temperature.update_value(self.metar.data.temperature.value)
-                logger.debug(f"temperature {self.metar.data.temperature.value}")
-                self.weather_dew_point.update_value(self.metar.data.dewpoint.value)
-                logger.debug(f"dew point {self.metar.data.dewpoint.value}")
-            else:
-                logger.debug(f"no metar data for {self.station.icao}")
-            self.weather_icon = self.select_weather_icon()
-            logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={updated}")
-            self.inc("real update")
-
-        return updated
-
     def get_image_for_icon(self):
         if self._busy_updating:
             logger.info(f"..updating in progress..")
@@ -719,6 +481,7 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             return self.get_surface_station_plot_image_for_icon()
         return self.get_metar_image_for_icon()
 
+    # Icon types: Metar text, Taf text, Station Plot
     def get_metar_image_for_icon(self):
         """
         Helper function to get button image and overlay label on top of it.
@@ -923,190 +686,6 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         logger.debug(f"..updated")
         self._busy_updating = False
         return self._cache
-
-    def has_trend(self) -> bool:
-        if len(self.previous_metars) > 0 and self.metar is not None and hasattr(self.metar, "raw"):
-            last = self.previous_metars[-1]
-            if last is None:
-                return False
-            return last[:4] == self.metar.raw[:4]  # same station
-        return False
-
-    def collect_station_plot_data(self) -> dict:
-        # #########################
-        # Information/value collection procedures
-        #
-        # left:
-        def get_plot_temperature():
-            return random.random() * 50 - 15
-
-        def get_plot_visibility():
-            return random.random() * 120
-
-        def get_plot_current_weather_code():
-            weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
-            codes = wx_code_to_numeric(weather)
-            return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
-
-        def get_plot_dew_point():
-            return -5 + random.random() * 10
-
-        def get_plot_sea_surface():
-            return 10 + random.random() * 10
-
-        # center:
-        def get_plot_high_clouds():
-            return random.random() * len(high_clouds)
-
-        def get_plot_middle_clouds():
-            return random.random() * len(mid_clouds)
-
-        def get_plot_total_sky_cover():
-            return random.random()
-
-        def get_plot_low_clouds():
-            return random.random() * len(low_clouds)
-
-        def get_plot_low_clouds_cover():
-            return random.random()
-
-        def get_plot_low_clouds_height():
-            return random.random() * 3000  # ft?
-
-        def get_plot_waves():
-            return (random.random() * 5, random.random() * 30)
-
-        def get_plot_wind():
-            return (
-                random.random() * 120,
-                random.random() * 360 if random.random() > 0.5 else None,
-                random.random() * 80 if random.random() > 0.5 else None,
-            )
-
-        # right:
-        def get_plot_pressure():
-            return 975 + random.random() * 60
-
-        def get_plot_pressure_change():
-            return -2 + random.random() * 4
-
-        def get_plot_pressure_change_trend():
-            return random.random() * len(pressure_tendency)
-
-        def get_plot_obs_utc():
-            return datetime.now()
-
-        def get_plot_past_weather_code():
-            weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
-            codes = wx_code_to_numeric(weather)
-            return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
-
-        def get_plot_precipitation_last_time():
-            return (random.random() * 2, random.random() * 5)
-
-        def get_plot_six_hour_precipitation_forewast():
-            return (random.random() * 2, random.random() * 5)
-
-        # code modifiers
-        def is_vicinity():
-            return random.random() > 0.5
-
-        def get_intensity():
-            return random.choice(["light", "moderate", "heavy"])
-
-        def is_intermittent():
-            return random.random() > 0.5
-
-        def is_virga():
-            return random.random() > 0.5
-
-        def is_past_hour_not_now():
-            return random.random() > 0.5
-
-        def is_past_hour_and_now():
-            return random.random() > 0.5
-
-        def is_decreased_past_hour_occuring_now():
-            return random.random() > 0.5
-
-        # #########################
-        # Information/value collection procedures
-        #
-        is_valid = self.is_metar_valid(metar=self.metar.raw)
-        if is_valid:
-            utc = self.get_utc(metar=self.metar.raw)
-            logger.info(f"METAR: {self.metar.raw}, utc={utc}")
-        no = "" if self.has_trend() else "no "
-        logger.info(f"has {no}trend")
-
-        logger.warning("using random weather for station plot display")
-        station_plot_data = {
-            "temperature": get_plot_temperature(),
-            "visibility": get_plot_visibility(),
-            "current_weather_code": get_plot_current_weather_code(),
-            "dew_point": get_plot_dew_point(),
-            "sea_surface": get_plot_sea_surface(),
-            "waves": get_plot_waves(),
-            "high_clouds": get_plot_high_clouds(),
-            "mid_clouds": get_plot_middle_clouds(),
-            "sky_cover": get_plot_total_sky_cover(),
-            "low_clouds": get_plot_low_clouds(),
-            "low_clouds_cover": get_plot_low_clouds_cover(),
-            "low_clouds_base_m": get_plot_low_clouds_height(),
-            "wind": get_plot_wind(),  # kn?
-            "pressure": get_plot_pressure(),
-            "pressure_change": get_plot_pressure_change(),
-            "pressure_trend": get_plot_pressure_change_trend(),
-            "past_weather_code": get_plot_past_weather_code(),
-            "past_precipitations": get_plot_precipitation_last_time(),
-            "forecast_precipitations": get_plot_six_hour_precipitation_forewast(),
-            "vicinity": is_vicinity(),
-            "intensity": get_intensity(),
-            "virga": is_virga(),
-            "past_hour_not_now": is_past_hour_not_now(),
-            "past_hour_and_now": is_past_hour_and_now(),
-            "decreased_past_hour_occuring_now": is_decreased_past_hour_occuring_now(),
-            "obs_utc": get_plot_obs_utc(),
-        }
-
-        # def random_weather():
-        #     weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
-        #     codes = wx_code_to_numeric(weather)
-        #     # print(">>>", weather, codes)
-        #     return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
-        # station_plot_data = {
-        #     "temperature": random.random() * 50 - 15,
-        #     "visibility": random.random() * 120,
-        #     "current_weather_code": random_weather(),
-        #     "dew_point": -5 + random.random() * 10,
-        #     "sea_surface": 10 + random.random() * 10,
-        #     "waves": (random.random() * 5, random.random() * 30),
-        #     "high_clouds": random.random() * len(high_clouds),
-        #     "mid_clouds": random.random() * len(mid_clouds),
-        #     "sky_cover": random.random(),
-        #     "low_clouds": random.random() * len(low_clouds),
-        #     "low_clouds_cover": random.random(),
-        #     "low_clouds_base_m": random.random() * 3000,
-        #     "wind": (
-        #         random.random() * 120,
-        #         random.random() * 360 if random.random() > 0.5 else None,
-        #         random.random() * 80 if random.random() > 0.5 else None,
-        #     ),  # kn?
-        #     "pressure": 975 + random.random() * 60,
-        #     "pressure_change": -2 + random.random() * 4,
-        #     "pressure_trend": random.random() * len(pressure_tendency),
-        #     "past_weather_code": random_weather(),
-        #     "past_precipitations": (random.random() * 2, random.random() * 5),
-        #     "forecast_precipitations": (random.random() * 2, random.random() * 5),
-        #     "vicinity": random.random() > 0.5,
-        #     "intensity": random.choice(["light", "moderate", "heavy"]),
-        #     "virga": random.random() > 0.5,
-        #     "past_hour_not_now": random.random() > 0.5,
-        #     "past_hour_and_now": random.random() > 0.5,
-        #     "decreased_past_hour_occuring_now": random.random() > 0.5,
-        #     "obs_utc": datetime.now(),
-        # }
-        return station_plot_data
 
     def get_surface_station_plot_image_for_icon(self):
         # See:
@@ -1638,6 +1217,60 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         # return self._cache
         return bg  # for debugging purpose
 
+    # #############################################
+    # Metar update and utility function
+    # - because time update
+    # - because station changed (because aircraft movement)
+    #
+    def get_station(self):
+        if not self.update_position:
+            return None
+
+        if self._last_updated is not None and not self.at_default_station():
+            now = datetime.now()
+            diff = now.timestamp() - self._last_updated.timestamp()
+            if diff < WeatherMetarIcon.MIN_UPDATE:
+                logger.debug(f"updated less than {WeatherMetarIcon.MIN_UPDATE} secs. ago ({diff}), skipping update.. ({self.speed})")
+                return None
+            logger.debug(f"updated {diff} secs. ago")
+
+        # If we are at the default station, we check where we are to see if we moved.
+        lat = self.button.get_simulator_variable_value("sim/flightmodel/position/latitude")
+        lon = self.button.get_simulator_variable_value("sim/flightmodel/position/longitude")
+
+        if lat is None or lon is None:
+            if (self._no_coord_warn % 10) == 0:
+                logger.warning("no coordinates")
+                self._no_coord_warn = self._no_coord_warn + 1
+            if self.station is None:  # If no station, attempt to suggest the default one if we find it
+                icao = self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
+                logger.warning(f"no station, getting default {icao}")
+                return Station.from_icao(icao)
+            return None
+
+        logger.debug(f"closest station to lat={lat},lon={lon}")
+        (nearest, coords) = Station.nearest(lat=lat, lon=lon, max_coord_distance=150000)
+        logger.debug(f"nearest={nearest}")
+        ## compute distance and require minimum displacment
+        dist = 0.0
+        if self.station is not None:
+            dist = distance((self.station.latitude, self.station.longitude), (lat, lon))
+            logger.info(f"moved={round(dist,3)}")
+            if dist > self.MIN_DISTANCE_MOVE_KM:
+                self._moved = True
+        else:
+            logger.debug("no station")
+        return nearest
+
+    def at_default_station(self):
+        ret = True
+        if self.weather is not None and self.station is not None:
+            ret = not self._moved and self.station.icao == self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
+            logger.debug(
+                f"currently at {self.station.icao}, default station {self.weather.get('station', WeatherMetarIcon.DEFAULT_STATION)}, moved={self._moved}, returns {ret}"
+            )
+        return ret
+
     def has_metar(self, what: str = "raw"):
         if what == "summary":
             return self.metar is not None and self.metar.summary is not None
@@ -1645,6 +1278,386 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
             return self.metar is not None and self.metar.data is not None
         return self.metar is not None and self.metar.raw is not None
 
+    def needs_update(self) -> bool:
+        # 1. No metar
+        if self.metar is None:
+            logger.debug(f"no metar")
+            return True
+        if self.metar.raw is None:
+            logger.debug(f"no updated metar")
+            return True
+        # 2. METAR older that 30min
+        if self._last_updated is None:
+            logger.debug(f"never updated")
+            return True
+        now = datetime.now()
+        diff = now.timestamp() - self._last_updated.timestamp()
+        if diff > WeatherMetarIcon.MIN_UPDATE:
+            logger.debug(f"expired")
+            return True
+        return False
+
+    def update_metar(self, create: bool = False):
+        if create:
+            self.metar = Metar(self.station.icao)
+            self.taf = Taf(self.station.icao)
+        if not self.needs_update():
+            return False
+        before = self.metar.raw
+        updated = self.metar.update()  # this should be the only place where the Metar/Taf gets updated
+        dummy = self.taf.update()
+        self._last_updated = datetime.now()
+        if updated:
+            if before is not None:
+                self.previous_metars.append(before)
+                self.previous_tafs.append(self.taf.raw)
+            logger.info(f"station {self.station.icao}, Metar updated")
+            logger.info(f"update: {before} -> {self.metar.raw}")
+            if self.show is not None:
+                self.print()
+        else:
+            logger.info(f"station {self.station.icao}, Metar fetched, unchanged")
+        return updated
+
+    def is_metar_valid(self, metar: str) -> bool:
+        try:
+            m = Metar.from_report(report=metar, issued=date.today())
+            return True
+        except:
+            logger.warning(f"invalid metar {metar}", exc_info=True)
+        return False
+
+    def get_utc(self, metar: str) -> bool:
+        try:
+            m = Metar.from_report(metar)
+            t = m.data.time  # !! this is a special AVWX Timestamp class, not python standard Timestamp !!
+            if t is not None:
+                return t.dt
+            return None
+        except:
+            logger.warning(f"invalid metar {metar}", exc_info=True)
+        return None
+
+    def update(self, force: bool = False) -> bool:
+        """
+        Creates or updates Metar. Call to avwx may fail, so it is wrapped into try/except block
+
+        :param    force:  The force
+        :type      force:  bool
+
+        :returns:   { description_of_the_return_value }
+        :rtype:  bool
+        """
+        self.inc("update")
+
+        updated = False
+        if force:
+            self._last_updated = None
+
+        new_station = self.get_station()
+
+        if new_station is None:
+            if self.station is None:
+                return updated  # no new station, no existing station, we leave it as it is
+
+        if self.station is None:
+            try:
+                self.station = new_station
+                updated = self.update_metar(create=True)
+                updated = True  # force
+                self.sun = Sun(self.station.latitude, self.station.longitude)
+                self.button._config["label"] = new_station.icao
+                logger.info(f"UPDATED: new station {self.station.icao}")
+            except:
+                self.metar = None
+                logger.warning(f"new station {new_station.icao}: Metar not created", exc_info=True)
+        elif new_station is not None and new_station.icao != self.station.icao:
+            try:
+                old_station = self.station.icao
+                self.station = new_station
+                updated = self.update_metar(create=True)
+                updated = True  # force
+                self.sun = Sun(self.station.latitude, self.station.longitude)
+                self.button._config["label"] = new_station.icao
+                logger.info(f"UPDATED: station changed from {old_station} to {self.station.icao}")
+            except:
+                self.metar = None
+                logger.warning(f"change station to {new_station.icao}: Metar not created", exc_info=True)
+        elif self.metar is None:  # create it the first time
+            try:
+                updated = self.update_metar(create=True)
+                updated = True  # force
+                logger.info(f"UPDATED: station {self.station.icao}, first Metar")
+            except:
+                self.metar = None
+                logger.warning(
+                    f"station {self.station.icao}, first Metar not created",
+                    exc_info=True,
+                )
+        else:
+            try:
+                now = datetime.now()
+                if self._last_updated is None:
+                    updated = self.update_metar()
+                    logger.debug(f"station {self.station.icao}, Metar collected")
+                else:
+                    diff = now.timestamp() - self._last_updated.timestamp()
+                    if diff > WeatherMetarIcon.MIN_UPDATE:
+                        updated = self.update_metar()
+                    else:
+                        logger.debug(f"station {self.station.icao}, Metar does not need updating (last updated at {self._last_updated})")
+            except:
+                self.metar = None
+                logger.warning(f"station {self.station.icao}: Metar not updated", exc_info=True)
+
+        # if new is None, we leave it as it is
+        if updated and self.station is not None:
+            # AVWX's Metar is not as comprehensive as python-metar's Metar...
+            if self.has_metar("data"):
+                logger.debug(f"data for {self.station.icao}")
+                self.weather_pressure.update_value(self.metar.data.altimeter.value)
+                logger.debug(f"pressure {self.metar.data.altimeter.value}")
+                self.weather_wind_speed.update_value(self.metar.data.wind_speed.value)
+                logger.debug(f"wind speed {self.metar.data.wind_speed.value}")
+                self.weather_temperature.update_value(self.metar.data.temperature.value)
+                logger.debug(f"temperature {self.metar.data.temperature.value}")
+                self.weather_dew_point.update_value(self.metar.data.dewpoint.value)
+                logger.debug(f"dew point {self.metar.data.dewpoint.value}")
+            else:
+                logger.debug(f"no metar data for {self.station.icao}")
+            self.weather_icon = self.select_weather_icon()
+            logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={updated}")
+            self.inc("real update")
+
+        return updated
+
+    def print(self):
+        # Print current situation
+        if self.has_metar("raw") and self.show == "nice":
+            obs = MetarDesc.Metar(self.metar.raw)
+            logger.info(f"Current:\n{obs.string()}")
+        elif self.has_metar("summary"):
+            logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
+
+        # Print forecast
+        taf = self.taf if self.taf is not None else Taf(self.station.icao)
+        if taf is not None:
+            taf_updated = taf.update()
+            if taf_updated and hasattr(taf, "summary"):
+                if self.show in ["nice", "taf"]:
+                    taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
+                    # Split TAF in blocks of forecasts
+                    forecast = []
+                    prevision = []
+                    for line in taf_text.split("\n"):
+                        if len(line.strip()) > 0:
+                            prevision.append(line)
+                        else:
+                            forecast.append(prevision)
+                            prevision = []
+                    # logger.info(f"Forecast:\n{taf_text}")
+                    logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
+                else:
+                    logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
+
+    # Time-related Metars
+    # Past
+    def get_metar_for(self, icao: str) -> list:
+        return filter(lambda m: m.startswith(icao), self.previous_metars)
+
+    def get_older_metar(self, icao: str) -> list:
+        candidates = self.get_metar_for(icao=icao)
+        return candidates
+
+    # Future
+    def get_taf_for(self, icao: str) -> list:
+        return filter(lambda m: m.startswith(icao), self.previous_tafs)
+
+    def has_trend(self) -> bool:
+        if len(self.previous_metars) > 0 and self.metar is not None and hasattr(self.metar, "raw"):
+            last = self.previous_metars[-1]
+            if last is None:
+                return False
+            return last[:4] == self.metar.raw[:4]  # same station
+        return False
+
+    def collect_station_plot_data(self, at_random: bool = False) -> dict:
+        # #########################
+        # Information/value collection procedures
+        #
+        # left:
+        def get_plot_temperature():
+            return random.random() * 50 - 15
+
+        def get_plot_visibility():
+            return random.random() * 120
+
+        def get_plot_current_weather_code():
+            weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
+            codes = wx_code_to_numeric(weather)
+            return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
+
+        def get_plot_dew_point():
+            return -5 + random.random() * 10
+
+        def get_plot_sea_surface():
+            return 10 + random.random() * 10
+
+        # center:
+        def get_plot_high_clouds():
+            return random.random() * len(high_clouds)
+
+        def get_plot_middle_clouds():
+            return random.random() * len(mid_clouds)
+
+        def get_plot_total_sky_cover():
+            return random.random()
+
+        def get_plot_low_clouds():
+            return random.random() * len(low_clouds)
+
+        def get_plot_low_clouds_cover():
+            return random.random()
+
+        def get_plot_low_clouds_height():
+            return random.random() * 3000  # ft?
+
+        def get_plot_waves():
+            return (random.random() * 5, random.random() * 30)
+
+        def get_plot_wind():
+            return (
+                random.random() * 120,
+                random.random() * 360 if random.random() > 0.5 else None,
+                random.random() * 80 if random.random() > 0.5 else None,
+            )
+
+        # right:
+        def get_plot_pressure():
+            return 975 + random.random() * 60
+
+        def get_plot_pressure_change():
+            return -2 + random.random() * 4
+
+        def get_plot_pressure_change_trend():
+            return random.random() * len(pressure_tendency)
+
+        def get_plot_obs_utc():
+            return datetime.now()
+
+        def get_plot_past_weather_code():
+            weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
+            codes = wx_code_to_numeric(weather)
+            return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
+
+        def get_plot_precipitation_last_time():
+            return (random.random() * 2, random.random() * 5)
+
+        def get_plot_six_hour_precipitation_forewast():
+            return (random.random() * 2, random.random() * 5)
+
+        # code modifiers
+        def is_vicinity():
+            return random.random() > 0.5
+
+        def get_intensity():
+            return random.choice(["light", "moderate", "heavy"])
+
+        def is_intermittent():
+            return random.random() > 0.5
+
+        def is_virga():
+            return random.random() > 0.5
+
+        def is_past_hour_not_now():
+            return random.random() > 0.5
+
+        def is_past_hour_and_now():
+            return random.random() > 0.5
+
+        def is_decreased_past_hour_occuring_now():
+            return random.random() > 0.5
+
+        # #########################
+        # Compilation
+        #
+        is_valid = self.is_metar_valid(metar=self.metar.raw)
+        if is_valid:
+            utc = self.get_utc(metar=self.metar.raw)
+            logger.info(f"METAR: {self.metar.raw}, utc={utc}")
+        no = "" if self.has_trend() else "no "
+        logger.info(f"has {no}trend")
+
+        logger.warning("using random weather for station plot display")
+        station_plot_data = {
+            "temperature": get_plot_temperature(),
+            "visibility": get_plot_visibility(),
+            "current_weather_code": get_plot_current_weather_code(),
+            "dew_point": get_plot_dew_point(),
+            "sea_surface": get_plot_sea_surface(),
+            "waves": get_plot_waves(),
+            "high_clouds": get_plot_high_clouds(),
+            "mid_clouds": get_plot_middle_clouds(),
+            "sky_cover": get_plot_total_sky_cover(),
+            "low_clouds": get_plot_low_clouds(),
+            "low_clouds_cover": get_plot_low_clouds_cover(),
+            "low_clouds_base_m": get_plot_low_clouds_height(),
+            "wind": get_plot_wind(),  # kn?
+            "pressure": get_plot_pressure(),
+            "pressure_change": get_plot_pressure_change(),
+            "pressure_trend": get_plot_pressure_change_trend(),
+            "past_weather_code": get_plot_past_weather_code(),
+            "past_precipitations": get_plot_precipitation_last_time(),
+            "forecast_precipitations": get_plot_six_hour_precipitation_forewast(),
+            "vicinity": is_vicinity(),
+            "intensity": get_intensity(),
+            "virga": is_virga(),
+            "past_hour_not_now": is_past_hour_not_now(),
+            "past_hour_and_now": is_past_hour_and_now(),
+            "decreased_past_hour_occuring_now": is_decreased_past_hour_occuring_now(),
+            "obs_utc": get_plot_obs_utc(),
+        }
+
+        # def random_weather():
+        #     weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
+        #     codes = wx_code_to_numeric(weather)
+        #     # print(">>>", weather, codes)
+        #     return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
+        # station_plot_data = {
+        #     "temperature": random.random() * 50 - 15,
+        #     "visibility": random.random() * 120,
+        #     "current_weather_code": random_weather(),
+        #     "dew_point": -5 + random.random() * 10,
+        #     "sea_surface": 10 + random.random() * 10,
+        #     "waves": (random.random() * 5, random.random() * 30),
+        #     "high_clouds": random.random() * len(high_clouds),
+        #     "mid_clouds": random.random() * len(mid_clouds),
+        #     "sky_cover": random.random(),
+        #     "low_clouds": random.random() * len(low_clouds),
+        #     "low_clouds_cover": random.random(),
+        #     "low_clouds_base_m": random.random() * 3000,
+        #     "wind": (
+        #         random.random() * 120,
+        #         random.random() * 360 if random.random() > 0.5 else None,
+        #         random.random() * 80 if random.random() > 0.5 else None,
+        #     ),  # kn?
+        #     "pressure": 975 + random.random() * 60,
+        #     "pressure_change": -2 + random.random() * 4,
+        #     "pressure_trend": random.random() * len(pressure_tendency),
+        #     "past_weather_code": random_weather(),
+        #     "past_precipitations": (random.random() * 2, random.random() * 5),
+        #     "forecast_precipitations": (random.random() * 2, random.random() * 5),
+        #     "vicinity": random.random() > 0.5,
+        #     "intensity": random.choice(["light", "moderate", "heavy"]),
+        #     "virga": random.random() > 0.5,
+        #     "past_hour_not_now": random.random() > 0.5,
+        #     "past_hour_and_now": random.random() > 0.5,
+        #     "decreased_past_hour_occuring_now": random.random() > 0.5,
+        #     "obs_utc": datetime.now(),
+        # }
+        return station_plot_data
+
+    # iconic weather representation
     def is_metar_day(self, sunrise: int = 6, sunset: int = 18) -> bool:
         if not self.has_metar():
             logger.debug("no metar, assuming day")
@@ -1764,9 +1777,12 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         logger.debug(f"found {dft_name}")
         return dft_name
 
-    def select_weather_icon(self):
+    def select_weather_icon(self, at_random: bool = False):
         # Needs improvement
         # Stolen from https://github.com/flybywiresim/efb
+        if at_random:
+            return random.choice(list(WEATHER_ICONS.values()))
+
         icon = "wi_cloud"
         if self.has_metar():
             rawtext = self.metar.raw[13:]  # strip ICAO DDHHMMZ
@@ -1854,15 +1870,11 @@ class WeatherMetarIcon(DrawAnimation, SimulatorVariableListener):
         logger.debug(f"day/night version: {day}: {daynight_icon}")
         return daynight_icon
 
-    def select_random_weather_icon(self):
-        # day or night
-        # cloud cover
-        # precipitation: type, quantity
-        # wind: speed
-        # currently random anyway...
-        return random.choice(list(WEATHER_ICONS.values()))
 
-
+#
+# Set up mapping objects for various groups of symbols. The integer values follow from
+# the WMO.
+#
 class CodePointMapping:
     """Map integer values to font code points."""
 
@@ -2198,11 +2210,6 @@ def wx_code_to_numeric(codes):
 
     return wx_sym_list
 
-
-#
-# Set up mapping objects for various groups of symbols. The integer values follow from
-# the WMO.
-#
 
 #: Current weather -- codes 1xx are mapped into the automated station symbols
 current_weather = CodePointMapping(
