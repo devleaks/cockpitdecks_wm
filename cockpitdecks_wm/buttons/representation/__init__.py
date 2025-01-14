@@ -1,2 +1,4 @@
 # Toliss Airbus specific
-from .weathermetaricon import WeatherMetarIcon
+from .weathermetar import WeatherMetarIcon
+from .weathertaf import WeatherTafIcon
+from .weatherstationplot import WeatherStationPlot
