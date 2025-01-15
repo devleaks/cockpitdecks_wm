@@ -22,27 +22,6 @@ logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
 # logger.setLevel(logging.DEBUG)
 
-# #############
-# Local constant
-#
-KW_NAME = "iconName"  # "cloud",
-KW_DAY = "day"  # 2,  0=night, 1=day, 2=day or night
-KW_NIGHT = "night"  # 1,
-KW_TAGS = "descriptor"  # [],
-KW_PRECIP = "precip"  # "RA",
-KW_VIS = "visibility"  # [""],
-KW_CLOUD = "cloud"  # ["BKN"],
-KW_WIND = "wind"  # [0, 21]
-
-WI_PREFIX = "wi_"
-DAY = "day_"
-NIGHT = "night_"
-NIGHT_ALT = "night_alt_"
-
-KW_CAVOK = "clear"  # Special keyword for CAVOK day or night
-CAVOK_DAY = "wi_day_sunny"
-CAVOK_NIGHT = "wi_night_clear"
-
 
 class WeatherData(DrawAnimation, SimulatorVariableListener):
     """
@@ -87,6 +66,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
         self.taf: Taf | None = None
         self.previous_tafs = []
         self.show = self.weather.get("summary")
+        self.auto = False
 
         self.weather_icon: str | None = None
         self.update_position = False
@@ -103,23 +83,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
 
         self.icon_color = self.weather.get("icon-color", self.get_attribute("text-color"))
         self._no_coord_warn = 0
-
-        # Plot defaults
-        self.plot_style = "bw"  # | "color"
-        self.plot_color = "black"
-        self.barb_color = (160, 160, 160)
-        self.text_color = "black"
-        self.text_alt_color = "grey"
-        self.text_past_color = "blue"
-        self.plot_inverse = "white"  # | self.icon_color
-        self.plot_text_font = "B612-Regular.ttf"
-        self.plot_wmo_font = "wx_symbols.ttf"
-        # for color plot (experimental)
-        self.info_color = "blue"
-        self.warn_color = "darkorange"
-        self.alert_color = "red"
-        self.good_color = "lime"
-        self.disabled_color = "grey"
 
     def init(self):
         if self._inited:

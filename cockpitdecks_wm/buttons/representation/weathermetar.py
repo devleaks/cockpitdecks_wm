@@ -13,10 +13,6 @@ from suntime import Sun
 from zoneinfo import ZoneInfo
 from timezonefinder import TimezoneFinder
 
-# these packages have better summary/description of decoded METAR/TAF
-from metar import Metar as MetarDesc
-import pytaf
-
 from PIL import Image, ImageDraw
 
 from cockpitdecks import ICON_SIZE
@@ -452,35 +448,6 @@ class WeatherMetarIcon(WeatherData):
 
         return updated
 
-    def print(self):
-        # Print current situation
-        if self.has_metar("raw") and self.show == "nice":
-            obs = MetarDesc.Metar(self.metar.raw)
-            logger.info(f"Current:\n{obs.string()}")
-        elif self.has_metar("summary"):
-            logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
-
-        # Print forecast
-        taf = self.taf if self.taf is not None else Taf(self.station.icao)
-        if taf is not None:
-            taf_updated = taf.update()
-            if taf_updated and hasattr(taf, "summary"):
-                if self.show in ["nice", "taf"]:
-                    taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
-                    # Split TAF in blocks of forecasts
-                    forecast = []
-                    prevision = []
-                    for line in taf_text.split("\n"):
-                        if len(line.strip()) > 0:
-                            prevision.append(line)
-                        else:
-                            forecast.append(prevision)
-                            prevision = []
-                    # logger.info(f"Forecast:\n{taf_text}")
-                    logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
-                else:
-                    logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
-
     # iconic weather representation
     def is_metar_day(self, sunrise: int = 6, sunset: int = 18) -> bool:
         if not self.has_metar():
@@ -715,6 +682,7 @@ NIGHT_ALT = "night_alt_"
 KW_CAVOK = "clear"  # Special keyword for CAVOK day or night
 CAVOK_DAY = "wi_day_sunny"
 CAVOK_NIGHT = "wi_night_clear"
+
 
 #
 # Weather icon

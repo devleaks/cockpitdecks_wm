@@ -17,9 +17,11 @@ from cockpitdecks.resources.iconfonts import (
 from cockpitdecks.resources.color import light_off, TRANSPARENT_PNG_COLOR
 
 from .weathermetar import WeatherMetarIcon
+
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
 # logger.setLevel(logging.DEBUG)
+
 
 class WeatherTafIcon(WeatherMetarIcon):
     """

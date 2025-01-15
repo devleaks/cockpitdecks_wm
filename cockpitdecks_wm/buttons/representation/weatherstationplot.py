@@ -9,9 +9,6 @@ import math
 from datetime import datetime
 from pprint import pprint
 
-# these packages have better summary/description of decoded METAR/TAF
-import pytaf
-
 from PIL import Image, ImageDraw
 
 from cockpitdecks import ICON_SIZE
@@ -623,24 +620,21 @@ class WeatherStationPlot(WeatherData):
     #
     # Time-related Metars
     # Past
-    def get_metar_for(self, icao: str) -> list:
-        return filter(lambda m: m.startswith(icao), self.previous_metars)
-
-    def get_older_metar(self, icao: str) -> list:
-        candidates = self.get_metar_for(icao=icao)
-        return candidates
-
-    # Future
-    def get_taf_for(self, icao: str) -> list:
-        return filter(lambda m: m.startswith(icao), self.previous_tafs)
-
-    def has_trend(self) -> bool:
-        if len(self.previous_metars) > 0 and self.metar is not None and hasattr(self.metar, "raw"):
-            last = self.previous_metars[-1]
-            if last is None:
-                return False
-            return last[:4] == self.metar.raw[:4]  # same station
-        return False
+    def get_clouds_at(self, alt: str) -> list:
+        clouds = self.metar.data.clouds
+        if clouds is None or len(clouds) == 0:
+            return []
+        altmin = 0
+        altmax = CLOUD_BASE_CODES[0]
+        if alt[:3] == "mid":
+            altmin = CLOUD_BASE_CODES[0]
+            altmax = CLOUD_BASE_CODES[1]
+        elif alt == "high":
+            altmin = CLOUD_BASE_CODES[1]
+            altmax = 1000
+        clouds = list(filter(lambda c: altmin <= int(c.base) < altmax, clouds))
+        logger.debug(f"clouds at {alt}: {clouds}")
+        return clouds
 
     def collect_station_plot_data(self, at_random: bool = False) -> dict:
         def to_1690(alt: float) -> str:  # code
@@ -661,6 +655,10 @@ class WeatherStationPlot(WeatherData):
         # Information/value collection procedures
         #
         # left:
+        def pd(s):
+            logger.debug("?" * 30 + s)
+            pass
+
         def value_of(s):
             return s.value if s is not None else None
 
@@ -670,11 +668,14 @@ class WeatherStationPlot(WeatherData):
         def get_plot_visibility():
             return value_of(self.metar.data.visibility)
 
-        def get_plot_current_weather_code():
-            codes = [c.repr for c in self.metar.data.wx_codes]
+        def _get_plot_weather_code(metar):
+            codes = [c.repr for c in metar.data.wx_codes]
             codenums = wx_code_to_numeric(codes)
-            print(">>>>>>", codes, codenums)
+            pd(f"get_plot_current_weather_code: {codes}, {codenums}")
             return codenums[0] if len(codenums) > 0 else None
+
+        def get_plot_current_weather_code():
+            return _get_plot_weather_code(self.metar)
 
         def get_plot_dew_point():
             return value_of(self.metar.data.dewpoint)
@@ -683,23 +684,53 @@ class WeatherStationPlot(WeatherData):
             return None
 
         # center:
-        def get_plot_high_clouds():
+        def get_plot_clouds(alt: str):
+            # gets the TYPE of cloud to make an icon
+            clouds = list(self.get_clouds_at(alt=alt))
+            if len(clouds) > 0:
+                for cloud in clouds:
+                    if cloud.modifier is not None:
+                        if cloud.modifier in CLOUD_TYPES:
+                            pd(f"get_plot_{alt}_clouds: {cloud.modifier}")
+                            return CLOUD_TYPES[cloud.modifier]["wmo_code_low"]
+                        else:
+                            logger.warning(f"get_plot_{alt}_clouds: invalid cloud type {cloud.modifier}")
             return None
+
+        def get_plot_high_clouds():
+            return get_plot_clouds(alt="high")
 
         def get_plot_middle_clouds():
-            return None
+            return get_plot_clouds(alt="mid")
 
         def get_plot_total_sky_cover():
-            return None
+            return get_plot_low_clouds_cover()
 
         def get_plot_low_clouds():
-            return None
+            return get_plot_clouds(alt="low")
 
         def get_plot_low_clouds_cover():
+            clouds = list(self.get_clouds_at(alt="low"))
+            cloud = clouds[0] if len(clouds) > 0 else None
+            if cloud is None:
+                return None
+            covertxt = cloud.type
+            pd(f"low cloud: {cloud}, {covertxt}")
+            if covertxt == "NSC":    # 0 8th
+                return 0
+            elif covertxt == "FEW":  # 1, 2
+                return 1 / 8
+            elif covertxt == "SCT":  # 3, 4
+                return 3 / 8
+            elif covertxt == "BKN":  # 5, 6, 7
+                return 6 / 8
+            elif covertxt == "OVC":  # 8
+                return 1
             return None
 
-        def get_plot_low_clouds_height():
-            return None
+        def get_plot_low_clouds_base():
+            clouds = list(self.get_clouds_at(alt="low"))
+            return int(clouds[0].base) * 30 if len(clouds) > 0 else None
 
         def get_plot_waves():
             return (None, None)
@@ -730,6 +761,11 @@ class WeatherStationPlot(WeatherData):
             return self.metar.data.time.dt
 
         def get_plot_past_weather_code():
+            metars = list(self.get_metar_for(icao=self.station.icao))
+            if len(metars) > 0:
+                metar = metars[-1]
+                m = Metar.from_report(report=metar)
+                return _get_plot_weather_code(metar=m)
             return None
 
         def get_plot_precipitation_last_time():
@@ -739,6 +775,9 @@ class WeatherStationPlot(WeatherData):
             return (None, None)
 
         # code modifiers: Intensity, Proximity, or Recency
+        def is_auto():
+            return "AUTO" in self.metar.raw
+
         def is_vicinity():
             return "VC" in self.metar.raw
 
@@ -770,7 +809,6 @@ class WeatherStationPlot(WeatherData):
             def random_weather():
                 weather = [random.choice(list(CodePointMapping.wx_code_map.keys()))]
                 codes = wx_code_to_numeric(weather)
-                # print(">>>", weather, codes)
                 return codes[0] if len(codes) > 0 else None  # random.random() * len(current_weather)
 
             station_plot_data = {
@@ -821,7 +859,7 @@ class WeatherStationPlot(WeatherData):
                 "sky_cover": get_plot_total_sky_cover(),
                 "low_clouds": get_plot_low_clouds(),
                 "low_clouds_cover": get_plot_low_clouds_cover(),
-                "low_clouds_base_m": get_plot_low_clouds_height(),
+                "low_clouds_base_m": get_plot_low_clouds_base(),
                 "wind": get_plot_wind(),  # kn?
                 "flight_rules": get_plot_flight_rules(),
                 "pressure": get_plot_pressure(),
@@ -846,19 +884,19 @@ class WeatherStationPlot(WeatherData):
 # Clouds
 #
 CLOUD_BASES = [3000, 6000]  # meters, low=ground-3000, mid=3000-6000, high=6000+
-CLOUD_BASE_CODES = ["100", "200"]  # meters, low=-100, mid=100-200, high=200+
+CLOUD_BASE_CODES = [100, 200]  # meters, low=-100, mid=100-200, high=200+
 CLOUD_TYPES = {
-    "CI": "Cirrus",
-    "CC": "Cirrocumulus",
-    "CS": "Cirrostratus",
-    "AC": "Altocumulus",
-    "ST": "Stratus",
-    "CU": "Cumulus",
-    "CB": "Cumulonimbus",
-    "AS": "Altostratus",
-    "NS": "Nimbostratus",
-    "SC": "Stratocumulus",
-    "TCU": "Cumulus congestus",
+    "CI": {"name": "Cirrus", "wmo_code_low": 0},
+    "CC": {"name": "Cirrocumulus", "wmo_code_low": 0},
+    "CS": {"name": "Cirrostratus", "wmo_code_low": 0},
+    "AC": {"name": "Altocumulus", "wmo_code_low": 0},
+    "ST": {"name": "Stratus", "wmo_code_low": 5},
+    "CU": {"name": "Cumulus", "wmo_code_low": 1},
+    "CB": {"name": "Cumulonimbus", "wmo_code_low": 9},
+    "AS": {"name": "Altostratus", "wmo_code_low": 0},
+    "NS": {"name": "Nimbostratus", "wmo_code_low": 0},
+    "SC": {"name": "Stratocumulus", "wmo_code_low": 4},
+    "TCU": {"name": "Cumulus congestus", "wmo_code_low": 3},
 }
 
 
@@ -866,6 +904,11 @@ CLOUD_TYPES = {
 # WMO
 # Set up mapping objects for various groups of symbols. The integer values follow from the WMO.
 #
+# Present weather (from manned (code 4677) and automatic (4680) stations):
+# WMO code 4677: Present weather reported from a manned station.
+# WMO code 4680: Present weather reported from an automatic station.
+
+
 class CodePointMapping:
     """Map integer values to font code points."""
 
