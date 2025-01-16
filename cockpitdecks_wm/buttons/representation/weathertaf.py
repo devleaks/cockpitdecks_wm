@@ -35,28 +35,27 @@ class WeatherTafIcon(WeatherMetarIcon):
     def __init__(self, button: "Button"):
 
         WeatherMetarIcon.__init__(self, button=button)
-        self.forecast = -1
 
     def get_lines(self) -> list | None:
         # We collect all forecasts, and display them in turn
-        if hasattr(self.taf, "summary"):
-            # return reduce(lambda x, t: x + wrap(t, width=21), self.taf.summary, [])
-            self.forecast = self.forecast + 1
-            taf_text = pytaf.Decoder(pytaf.TAF(self.taf.raw)).decode_taf()
-            # Split TAF in blocks of forecasts
-            forecast = []
-            prevision = []
-            for line in taf_text.split("\n"):
-                if len(line.strip()) > 0:
-                    prevision.append(line)
-                else:
-                    forecast.append(prevision)
-                    prevision = []
-            return forecast[self.forecast % len(forecast)]
+        if not hasattr(self.taf, "summary"):
+            logger.warning(f"TAF has no summary")
+            return None
 
-        logger.warning(f"TAF has no summary")
-        return None
-
+        # return reduce(lambda x, t: x + wrap(t, width=21), self.taf.summary, [])
+        bv = self.button.value
+        bv = 0 if bv is None else int(bv)
+        taf_text = pytaf.Decoder(pytaf.TAF(self.taf.raw)).decode_taf()
+        # Split TAF in blocks of forecasts
+        forecast = []
+        prevision = []
+        for line in taf_text.split("\n"):
+            if len(line.strip()) > 0:
+                prevision.append(line)
+            else:
+                forecast.append(prevision)
+                prevision = []
+        return [f"Forecast page {bv % len(forecast)} / {len(forecast)}"] + forecast[bv % len(forecast)]
 
     def get_image_for_icon(self):
         """
@@ -64,25 +63,20 @@ class WeatherTafIcon(WeatherMetarIcon):
         Label may be updated at each activation since it can contain datarefs.
         Also add a little marker on placeholder/invalid buttons that will do nothing.
         """
+        print("yup")
         if self._busy_updating:
             logger.info("..updating in progress..")
             return
         self._busy_updating = True
         logger.debug("updating..")
 
-        bv = self.button.value
-        if bv is None:
-            bv = 0
-        else:
-            bv = int(bv)
-        bv = bv % 48.0  # hours
-
-        print(">>>>>>>>", bv)
-
-        if not self.update() and self._cache is not None:
-            logger.debug("..not updated, using cache")
-            self._busy_updating = False
-            return self._cache
+        # if not self.update() and self._cache is not None:
+        #     print("yup no update")
+        #     logger.debug("..not updated, using cache")
+        #     self._busy_updating = False
+        #     return self._cache
+        if self.needs_update():
+            self.update()
 
         image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
         draw = ImageDraw.Draw(image)

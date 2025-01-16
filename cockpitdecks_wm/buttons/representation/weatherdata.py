@@ -130,7 +130,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
     # #############################################
     # Cockpitdecks Representation interface
     #
-    def get_simulator_variable(self) -> set:
+    def get_variables(self) -> set:
         ret = {
             "sim/flightmodel/position/latitude",
             "sim/flightmodel/position/longitude",

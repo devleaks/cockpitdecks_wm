@@ -5,6 +5,7 @@ import logging
 import random
 import math
 from datetime import datetime
+
 # from pprint import pprint
 
 from PIL import Image, ImageDraw
@@ -21,12 +22,7 @@ logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
 # logger.setLevel(logging.DEBUG)
 
-FLIGHT_RULES = {
-    "VFR": "green",
-    "MVFR": "blue",
-    "IFR": "red",
-    "LIFR": "purple"
-}
+FLIGHT_RULES = {"VFR": "green", "MVFR": "blue", "IFR": "red", "LIFR": "purple"}
 
 
 class WeatherStationPlot(WeatherData):
@@ -76,7 +72,7 @@ class WeatherStationPlot(WeatherData):
             self._busy_updating = False
             return self._cache
 
-        logger.setLevel(logging.DEBUG)
+        # logger.setLevel(logging.DEBUG)
         image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
 
         if not self.has_metar():
@@ -655,7 +651,7 @@ class WeatherStationPlot(WeatherData):
         bg.alpha_composite(image)
 
         logger.debug(f"..plot updated")
-        logger.setLevel(logging.INFO)
+        # logger.setLevel(logging.INFO)
         self._busy_updating = False
         # self._cache = bg
         # return self._cache
