@@ -4,9 +4,10 @@
 import logging
 import random
 import math
+import re
 from datetime import datetime
 
-# from pprint import pprint
+from pprint import pprint
 
 from PIL import Image, ImageDraw
 
@@ -343,18 +344,18 @@ class WeatherStationPlot(WeatherData):
             draw.text((thiscell[0], thiscell[1] + shift), text=text, font=textfont, anchor="mm", align="center", fill=self.text_color)
 
         def draw_wind_barbs():
-            speed, direction, gust = station_plot_data["wind"]
+            speed, direction, gust, variable = station_plot_data["wind"]
 
             if speed is None and direction is None:
                 logger.warning("no wind data")
                 return
             # rounds direction to quarter cardinals N-NE
-            if speed is None:
-                speed = 0  # no wind
             steps = 22.5  # °
             add_gust_speed = False
 
-            pd(f"draw_wind_barbs: speed {round(speed, 1)}, {round(direction, 1) if direction is not None else '---'}")
+            speedtxt = "no speed" if speed is None else round(speed, 1)
+            dirtxt = "---" if direction is None else round(direction, 1)
+            pd(f"draw_wind_barbs: speed {speedtxt}, {dirtxt}")
             wind_image = Image.new(mode="RGBA", size=(PLOT_SIZE, PLOT_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
             wd = ImageDraw.Draw(wind_image)
 
@@ -368,11 +369,11 @@ class WeatherStationPlot(WeatherData):
             triheight = int(PLOT_SIZE / 8)
 
             if speed is None:
-                if direction is not None:
-                    # just a bar to indicate wind direction?
-                    wd.line([(S12, S12), (S12, barend)], width=barbwidth, fill=self.barb_color)
-                    wind_image = wind_image.rotate(angle=180 - direction)
-                    image.alpha_composite(wind_image)
+                logger.warning("no wind speed")
+                # just a bar to indicate wind direction?
+                wd.line([(S12, S12), (S12, barend)], width=barbwidth, fill=self.barb_color)
+                wind_image = wind_image.rotate(angle=180 - direction)
+                image.alpha_composite(wind_image)
                 return
 
             totspeed = speed
@@ -443,10 +444,12 @@ class WeatherStationPlot(WeatherData):
                             gusttotal = gusttotal - 5
                             has_half_barb = True
 
-                if direction is not None:
+                if direction is not None and not variable:
                     direction = steps * round(direction / steps)
                     wind_image = wind_image.rotate(angle=180 - direction)
                 else:
+                    if variable:
+                        logger.warning("wind has variable direction, no directional plot")
                     wind_image = wind_image.rotate(angle=90)
                     # Move windbar out of drawing (bottom)
                     a = 1
@@ -781,12 +784,11 @@ class WeatherStationPlot(WeatherData):
 
         def get_plot_wind():
             variable = len(self.metar.data.wind_variable_direction) > 1
-            logger.warning(f"wind variable, speed {value_of(self.metar.data.wind_speed)}")
-            return (
-                value_of(self.metar.data.wind_speed),
-                value_of(self.metar.data.wind_direction),
-                value_of(self.metar.data.wind_gust),
-            )
+            if variable:
+                logger.warning(
+                    f"wind variable, speed {value_of(self.metar.data.wind_speed)}, directions {', '.join([str(n.value) for n in self.metar.data.wind_variable_direction])}"
+                )
+            return (value_of(self.metar.data.wind_speed), value_of(self.metar.data.wind_direction), value_of(self.metar.data.wind_gust), variable)
 
         # right:
         def get_plot_flight_rules():
@@ -813,7 +815,13 @@ class WeatherStationPlot(WeatherData):
             return None
 
         def get_plot_precipitation_last_time():
-            return (None, None)
+            # Precipitation quantity past hours
+            precip = re.findall("P([\\d]+)", self.metar.raw)
+            if len(precip) == 0:
+                return (None, None)
+            # Precipitation type past hours
+            # to be done
+            return (None, 2.54 * int(precip[0])/100)  # P0123 is in 1/100th of inch
 
         def get_plot_six_hour_precipitation_forewast():
             return (None, None)

@@ -20,7 +20,6 @@ from cockpitdecks.resources.geo import distance
 from cockpitdecks.simulator import SimulatorVariable
 
 from .weatherdata import WeatherData
-from .weathericon import WeatherIcon
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
@@ -45,8 +44,6 @@ class WeatherMetarIcon(WeatherData):
     }
 
     def __init__(self, button: "Button"):
-        self.weather_icon = None
-        self.weather_icon_factory = WeatherIcon()  # decorating weather icon image
         WeatherData.__init__(self, button=button)
 
     # #############################################
@@ -107,6 +104,19 @@ class WeatherMetarIcon(WeatherData):
             self._busy_updating = False
             return self._cache
 
+        return self.make_image_for_icon()
+
+    def get_lines(self) -> list | None:
+        lines = None
+        try:
+            if self.has_metar("summary"):
+                lines = self.metar.summary.split(",")  # ~ 6-7 short lines
+        except:
+            lines = None
+            logger.warning(f"Metar has no summary")
+        return lines
+
+    def make_image_for_icon(self):
         image = Image.new(mode="RGBA", size=(ICON_SIZE, ICON_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
         draw = ImageDraw.Draw(image)
         inside = round(0.04 * image.width + 0.5)
@@ -141,14 +151,7 @@ class WeatherMetarIcon(WeatherData):
         )
 
         # Weather Data
-        lines = None
-        try:
-            if self.has_metar("summary"):
-                lines = self.metar.summary.split(",")  # ~ 6-7 short lines
-        except:
-            lines = None
-            logger.warning(f"Metar has no summary")
-            # logger.warning(f"get_image_for_icon: Metar has no summary", exc_info=True)
+        lines = self.get_lines()
 
         if lines is not None:
             text, text_format, text_font, text_color, text_size, text_position = self.get_text_detail(self._representation_config, "weather")
@@ -194,197 +197,3 @@ class WeatherMetarIcon(WeatherData):
         logger.debug(f"..updated")
         self._busy_updating = False
         return self._cache
-
-    # #############################################
-    # Metar update and utility function
-    # - because time update
-    # - because station changed (because aircraft movement)
-    #
-    def get_station(self):
-        if not self.update_position:
-            return None
-
-        if self._last_updated is not None and not self.at_default_station():
-            now = datetime.now()
-            diff = now.timestamp() - self._last_updated.timestamp()
-            if diff < WeatherMetarIcon.MIN_UPDATE:
-                logger.debug(f"updated less than {WeatherMetarIcon.MIN_UPDATE} secs. ago ({diff}), skipping update.. ({self.speed})")
-                return None
-            logger.debug(f"updated {diff} secs. ago")
-
-        # If we are at the default station, we check where we are to see if we moved.
-        lat = self.button.get_simulator_variable_value("sim/flightmodel/position/latitude")
-        lon = self.button.get_simulator_variable_value("sim/flightmodel/position/longitude")
-
-        if lat is None or lon is None:
-            if (self._no_coord_warn % 10) == 0:
-                logger.warning("no coordinates")
-                self._no_coord_warn = self._no_coord_warn + 1
-            if self.station is None:  # If no station, attempt to suggest the default one if we find it
-                icao = self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
-                logger.warning(f"no station, getting default {icao}")
-                return Station.from_icao(icao)
-            return None
-
-        logger.debug(f"closest station to lat={lat},lon={lon}")
-        (nearest, coords) = Station.nearest(lat=lat, lon=lon, max_coord_distance=150000)
-        logger.debug(f"nearest={nearest}")
-        ## compute distance and require minimum displacment
-        dist = 0.0
-        if self.station is not None:
-            dist = distance((self.station.latitude, self.station.longitude), (lat, lon))
-            logger.info(f"moved={round(dist,3)}")
-            if dist > self.MIN_DISTANCE_MOVE_KM:
-                self._moved = True
-        else:
-            logger.debug("no station")
-        return nearest
-
-    def at_default_station(self):
-        ret = True
-        if self.weather is not None and self.station is not None:
-            ret = not self._moved and self.station.icao == self.weather.get("station", WeatherMetarIcon.DEFAULT_STATION)
-            logger.debug(
-                f"currently at {self.station.icao}, default station {self.weather.get('station', WeatherMetarIcon.DEFAULT_STATION)}, moved={self._moved}, returns {ret}"
-            )
-        return ret
-
-    def has_metar(self, what: str = "raw"):
-        if what == "summary":
-            return self.metar is not None and self.metar.summary is not None
-        elif what == "data":
-            return self.metar is not None and self.metar.data is not None
-        return self.metar is not None and self.metar.raw is not None
-
-    def needs_update(self) -> bool:
-        # 1. No metar
-        if self.metar is None:
-            logger.debug(f"no metar")
-            return True
-        if self.metar.raw is None:
-            logger.debug(f"no updated metar")
-            return True
-        # 2. METAR older that 30min
-        if self._last_updated is None:
-            logger.debug(f"never updated")
-            return True
-        now = datetime.now()
-        diff = now.timestamp() - self._last_updated.timestamp()
-        if diff > WeatherMetarIcon.MIN_UPDATE:
-            logger.debug(f"expired")
-            return True
-        return False
-
-    def update_metar(self, create: bool = False):
-        if create:
-            self.metar = Metar(self.station.icao)
-            self.taf = Taf(self.station.icao)
-        if not self.needs_update():
-            return False
-        before = self.metar.raw
-        updated = self.metar.update()  # this should be the only place where the Metar/Taf gets updated
-        dummy = self.taf.update()
-        self._last_updated = datetime.now()
-        if updated:
-            if before is not None:
-                self.previous_metars.append(before)
-                self.previous_tafs.append(self.taf.raw)
-            logger.info(f"station {self.station.icao}, Metar updated")
-            logger.info(f"update: {before} -> {self.metar.raw}")
-            if self.show is not None:
-                self.print()
-        else:
-            logger.info(f"station {self.station.icao}, Metar fetched, unchanged")
-        return updated
-
-    def update(self, force: bool = False) -> bool:
-        """
-        Creates or updates Metar. Call to avwx may fail, so it is wrapped into try/except block
-
-        :param    force:  The force
-        :type      force:  bool
-
-        :returns:   { description_of_the_return_value }
-        :rtype:  bool
-        """
-        self.inc("update")
-
-        updated = False
-        if force:
-            self._last_updated = None
-
-        new_station = self.get_station()
-
-        if new_station is None:
-            if self.station is None:
-                return updated  # no new station, no existing station, we leave it as it is
-
-        if self.station is None:
-            try:
-                self.station = new_station
-                updated = self.update_metar(create=True)
-                updated = True  # force
-                self.button._config["label"] = new_station.icao
-                logger.info(f"UPDATED: new station {self.station.icao}")
-            except:
-                self.metar = None
-                logger.warning(f"new station {new_station.icao}: Metar not created", exc_info=True)
-        elif new_station is not None and new_station.icao != self.station.icao:
-            try:
-                old_station = self.station.icao
-                self.station = new_station
-                updated = self.update_metar(create=True)
-                updated = True  # force
-                self.button._config["label"] = new_station.icao
-                logger.info(f"UPDATED: station changed from {old_station} to {self.station.icao}")
-            except:
-                self.metar = None
-                logger.warning(f"change station to {new_station.icao}: Metar not created", exc_info=True)
-        elif self.metar is None:  # create it the first time
-            try:
-                updated = self.update_metar(create=True)
-                updated = True  # force
-                logger.info(f"UPDATED: station {self.station.icao}, first Metar")
-            except:
-                self.metar = None
-                logger.warning(
-                    f"station {self.station.icao}, first Metar not created",
-                    exc_info=True,
-                )
-        else:
-            try:
-                now = datetime.now()
-                if self._last_updated is None:
-                    updated = self.update_metar()
-                    logger.debug(f"station {self.station.icao}, Metar collected")
-                else:
-                    diff = now.timestamp() - self._last_updated.timestamp()
-                    if diff > WeatherMetarIcon.MIN_UPDATE:
-                        updated = self.update_metar()
-                    else:
-                        logger.debug(f"station {self.station.icao}, Metar does not need updating (last updated at {self._last_updated})")
-            except:
-                self.metar = None
-                logger.warning(f"station {self.station.icao}: Metar not updated", exc_info=True)
-
-        # if new is None, we leave it as it is
-        if updated and self.station is not None:
-            # AVWX's Metar is not as comprehensive as python-metar's Metar...
-            if self.has_metar("data"):
-                logger.debug(f"data for {self.station.icao}")
-                self.weather_pressure.update_value(self.metar.data.altimeter.value)
-                logger.debug(f"pressure {self.metar.data.altimeter.value}")
-                self.weather_wind_speed.update_value(self.metar.data.wind_speed.value)
-                logger.debug(f"wind speed {self.metar.data.wind_speed.value}")
-                self.weather_temperature.update_value(self.metar.data.temperature.value)
-                logger.debug(f"temperature {self.metar.data.temperature.value}")
-                self.weather_dew_point.update_value(self.metar.data.dewpoint.value)
-                logger.debug(f"dew point {self.metar.data.dewpoint.value}")
-            else:
-                logger.debug(f"no metar data for {self.station.icao}")
-            if self.weather_icon_factory is not None:
-                self.weather_icon = self.weather_icon_factory.select_weather_icon(metar=self.metar, station=self.station)
-            logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={updated}")
-            self.inc("real update")
-
-        return updated

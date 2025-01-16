@@ -363,9 +363,16 @@ class WeatherIcon:
         if at_random:
             return random.choice(list(WEATHER_ICONS.values()))
 
-        self.sun = Sun(station.latitude, station.longitude)
-
         icon = "wi_cloud"
+
+        if station is not None:
+            self.sun = Sun(station.latitude, station.longitude)
+        else:
+            logger.warning("no station, cannot determine lat/lon or sun time")
+
+        if metar is None:
+            logger.warning("no metar")
+            return icon
 
         rawtext = metar.raw[13:]  # strip ICAO DDHHMMZ
         logger.debug(f"METAR {rawtext}")
@@ -379,7 +386,7 @@ class WeatherIcon:
         logger.debug(f"WIND {wind}")
 
         findIcon = []
-        for item in WI.DB:
+        for item in WeatherIcon.DB:
             t1 = reduce(
                 lambda x, y: x + y,
                 [rawtext.find(desc) for desc in item[KW_TAGS]],
@@ -418,7 +425,7 @@ class WeatherIcon:
         #                            and ((len(item[KW_CLOUD]) == 0) or (len(item[KW_CLOUD]) == 1 and item[KW_CLOUD][0] == "") or (reduce(lambda x, y: x + y, [rawtext.find(cld) for cld in item[KW_CLOUD]], 0) > 0))
         #                            and (wind > item[KW_WIND][0] and wind < item[KW_WIND][1])
         #                            and ((len(item[KW_VIS]) == 0) or (reduce(lambda x, y: x + y, [rawtext.find(vis) for vis in item[KW_VIS]], 0) > 0)),
-        #                  WI.DB))
+        #                  WeatherIcon.DB))
         # logger.debug(f"STEP 1 {findIcon}")
 
         l = len(findIcon)
@@ -441,7 +448,7 @@ class WeatherIcon:
                     icon = findIcon2[0]["iconName"]
 
         logger.debug(f"weather icon {icon}")
-        day = self.is_metar_day()
+        day = self.is_metar_day(metar=metar, station=station)
         daynight_icon = self.day_night(icon, day)
         if daynight_icon is None:
             logger.warning(f"no icon, using default {DEFAULT_WEATHER_ICON}")

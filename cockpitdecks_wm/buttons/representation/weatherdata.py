@@ -15,6 +15,7 @@ from cockpitdecks.resources.geo import distance
 from cockpitdecks.simulator import SimulatorVariable, SimulatorVariableListener
 from cockpitdecks.buttons.representation.draw_animation import DrawAnimation
 
+from .weathericon import WeatherIcon
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
@@ -65,12 +66,13 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
         self.show = self.weather.get("summary")
         self.auto = False
 
-        self.weather_icon: str | None = None
-        self.weather_icon_factory = None
         self.update_position = False
 
         self.icao_dataref_path = button._config.get("string-dataref")
         self.icao_dataref = None
+
+        self.weather_icon = None
+        self.weather_icon_factory = WeatherIcon()  # decorating weather icon image
 
         DrawAnimation.__init__(self, button=button)
         SimulatorVariableListener.__init__(self)
@@ -122,8 +124,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 logger.debug(f"dew point {self.metar.data.dewpoint.value}")
             else:
                 logger.debug(f"no metar for {self.station.icao}")
-            if self.weather_icon_factory is not None:
-                self.weather_icon = self.weather_icon_factory.select_weather_icon(metar=self.metar, station=self.station)
             logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={self._last_updated}")
         self._inited = True
 
@@ -360,6 +360,9 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 logger.debug(f"no metar data for {self.station.icao}")
             if self.weather_icon_factory is not None:
                 self.weather_icon = self.weather_icon_factory.select_weather_icon(metar=self.metar, station=self.station)
+                print(">>>>>>>>>> set icon", self.weather_icon)
+            else:
+                print(">>>>>>>>>> NO FACTORY")
             logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={updated}")
             self.inc("real update")
 
