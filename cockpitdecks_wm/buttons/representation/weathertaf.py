@@ -2,6 +2,8 @@
 # Representation of a Taf in short textual summary form
 #
 import logging
+from textwrap import wrap
+from functools import reduce
 
 # these packages have better summary/description of decoded METAR/TAF
 import pytaf
@@ -33,6 +35,28 @@ class WeatherTafIcon(WeatherMetarIcon):
     def __init__(self, button: "Button"):
 
         WeatherMetarIcon.__init__(self, button=button)
+        self.forecast = -1
+
+    def get_lines(self) -> list | None:
+        # We collect all forecasts, and display them in turn
+        if hasattr(self.taf, "summary"):
+            # return reduce(lambda x, t: x + wrap(t, width=21), self.taf.summary, [])
+            self.forecast = self.forecast + 1
+            taf_text = pytaf.Decoder(pytaf.TAF(self.taf.raw)).decode_taf()
+            # Split TAF in blocks of forecasts
+            forecast = []
+            prevision = []
+            for line in taf_text.split("\n"):
+                if len(line.strip()) > 0:
+                    prevision.append(line)
+                else:
+                    forecast.append(prevision)
+                    prevision = []
+            return forecast[self.forecast % len(forecast)]
+
+        logger.warning(f"TAF has no summary")
+        return None
+
 
     def get_image_for_icon(self):
         """
@@ -41,7 +65,7 @@ class WeatherTafIcon(WeatherMetarIcon):
         Also add a little marker on placeholder/invalid buttons that will do nothing.
         """
         if self._busy_updating:
-            logger.info(f"..updating in progress..")
+            logger.info("..updating in progress..")
             return
         self._busy_updating = True
         logger.debug("updating..")
@@ -53,8 +77,10 @@ class WeatherTafIcon(WeatherMetarIcon):
             bv = int(bv)
         bv = bv % 48.0  # hours
 
+        print(">>>>>>>>", bv)
+
         if not self.update() and self._cache is not None:
-            logger.debug(f"..not updated, using cache")
+            logger.debug("..not updated, using cache")
             self._busy_updating = False
             return self._cache
 
@@ -91,15 +117,9 @@ class WeatherTafIcon(WeatherMetarIcon):
             fill=light_off(icon_color, 0.8),
         )
 
-        # Weather Data
-        lines = None
-        try:
-            if self.has_metar("summary"):
-                lines = self.metar.summary.split(",")  # ~ 6-7 short lines
-        except:
-            lines = None
-            logger.warning(f"Metar has no summary")
-            # logger.warning(f"get_image_for_icon: Metar has no summary", exc_info=True)
+        # Weather Forecast Data
+        # This will do for now
+        lines = self.get_lines()
 
         if lines is not None:
             text, text_format, text_font, text_color, text_size, text_position = self.get_text_detail(self._representation_config, "weather")

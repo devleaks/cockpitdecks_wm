@@ -1,15 +1,15 @@
 # ###########################
 # Iconic representation of weather ground station plot
 #
-from __future__ import annotations
 import logging
 import random
-import re
 import math
 from datetime import datetime
-from pprint import pprint
+# from pprint import pprint
 
 from PIL import Image, ImageDraw
+
+from avwx import Metar
 
 from cockpitdecks import ICON_SIZE
 from cockpitdecks.resources.color import TRANSPARENT_PNG_COLOR
@@ -20,6 +20,13 @@ from .weatherdata import WeatherData
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
 # logger.setLevel(logging.DEBUG)
+
+FLIGHT_RULES = {
+    "VFR": "green",
+    "MVFR": "blue",
+    "IFR": "red",
+    "LIFR": "purple"
+}
 
 
 class WeatherStationPlot(WeatherData):
@@ -91,7 +98,7 @@ class WeatherStationPlot(WeatherData):
         wmofont_small = self.get_font(self.plot_wmo_font, int(PLOT_SIZE / 11))
 
         def pd(s):
-            logger.debug("*" * 30 + s)
+            # logger.debug("*" * 30 + s)
             pass
 
         def cell_center(x, y):
@@ -251,11 +258,13 @@ class WeatherStationPlot(WeatherData):
             )
 
         def draw_total_sky_cover():
+            vis = station_plot_data["flight_rules"]
+            viscolor = FLIGHT_RULES.get(vis, self.plot_color)
             coverage = station_plot_data["sky_cover"]
             radius = int(PLOT_SIZE / 12)
             width = 3
             bbox = (S12 - radius, S12 - radius, S12 + radius, S12 + radius)
-            draw.ellipse(bbox, width=width, outline=self.plot_color)
+            draw.ellipse(bbox, width=width, outline=viscolor)
             if coverage is None:
                 pd(f"draw_total_sky_cover: no coverage")
                 return
@@ -264,22 +273,22 @@ class WeatherStationPlot(WeatherData):
             if covidx == 0:
                 return
             if covidx in [2, 3]:
-                draw.pieslice(bbox, -90, 0, fill=self.plot_color)
+                draw.pieslice(bbox, -90, 0, fill=viscolor)
                 if covidx == 2:
                     return
             if covidx in [1, 3]:
-                draw.line([(S12, S12 - radius), (S12, S12 + radius)], width=width, fill=self.plot_color)
+                draw.line([(S12, S12 - radius), (S12, S12 + radius)], width=2 * width, fill=viscolor)
                 return
             if covidx in [4, 5]:
-                draw.pieslice(bbox, -90, 90, fill=self.plot_color)
+                draw.pieslice(bbox, -90, 90, fill=viscolor)
                 if covidx == 4:
                     return
-                draw.line([(S12, S12 - radius), (S12, S12 + radius)], width=width, fill=self.plot_color)
+                draw.line([(S12, S12 - radius), (S12, S12 + radius)], width=2 * width, fill=viscolor)
                 return
             if covidx == 6:
-                draw.pieslice(bbox, -90, 180, fill=self.plot_color)
+                draw.pieslice(bbox, -90, 180, fill=viscolor)
                 return
-            draw.ellipse(bbox, fill=self.plot_color)
+            draw.ellipse(bbox, fill=viscolor)
             if covidx == 7:
                 draw.line([(S12, S12 - radius), (S12, S12 + radius)], width=2 * width, fill=self.plot_inverse)
 
@@ -347,6 +356,7 @@ class WeatherStationPlot(WeatherData):
             if speed is None:
                 speed = 0  # no wind
             steps = 22.5  # °
+            add_gust_speed = False
 
             pd(f"draw_wind_barbs: speed {round(speed, 1)}, {round(direction, 1) if direction is not None else '---'}")
             wind_image = Image.new(mode="RGBA", size=(PLOT_SIZE, PLOT_SIZE), color=TRANSPARENT_PNG_COLOR)  # annunciator text and leds , color=(0, 0, 0, 0)
@@ -370,6 +380,7 @@ class WeatherStationPlot(WeatherData):
                 return
 
             totspeed = speed
+            has_half_barb = False
 
             if totspeed < 5:
                 radius = int(PLOT_SIZE / 12) + 8
@@ -378,7 +389,7 @@ class WeatherStationPlot(WeatherData):
             else:
                 wd.line([(S12, S12), (S12, barend)], width=barbwidth, fill=self.barb_color)
                 # Draw triangles for 50kn
-                while totspeed > 50:
+                while totspeed >= 50:
                     first = (S12, barend)
                     barend = barend - barstep
                     second = (S12, barend)
@@ -386,19 +397,55 @@ class WeatherStationPlot(WeatherData):
                     wd.polygon([first, second, top, first], fill=self.barb_color)
                     totspeed = totspeed - 50
                 # Draw long bar for 50kn
-                while totspeed > 10:
+                while totspeed >= 10:
                     start = (S12, barend)
                     end = (S12 + triheight, barend + slant)
                     wd.line([start, end], width=barbwidth, fill=self.barb_color)
                     barend = barend - barstep
                     totspeed = totspeed - 10
                 # Draw short bar for 5kn
-                while totspeed > 5:
+                while totspeed >= 5:
                     start = (S12, barend)
                     end = (S12 + triheight / 2, barend + slant / 2)
                     wd.line([start, end], width=barbwidth, fill=self.barb_color)
                     barend = barend - barstep
                     totspeed = totspeed - 5
+                    has_half_barb = True
+
+                if gust is not None:
+                    # Add red barbs
+                    gusttotal = gust - speed
+                    if gusttotal > 0:  # which it should
+                        if gusttotal >= 5 and has_half_barb:
+                            barend = barend + barstep  # backup last barb
+                            start = (S12 + triheight / 2, barend + slant / 2)  # paint second half of barb in red
+                            end = (S12 + triheight, barend + slant)
+                            wd.line([start, end], width=barbwidth, fill="red")
+                            barend = barend - barstep  # next barb
+                            gusttotal = gusttotal - 5
+                            has_half_barb = True
+                        # gust 50kt *additional* speed is improbable
+                        # while gusttotal >= 50:
+                        #     first = (S12, barend)
+                        #     barend = barend - barstep
+                        #     second = (S12, barend)
+                        #     top = (S12 + triheight, barend + barstep / 2 + slant)
+                        #     wd.polygon([first, second, top, first], fill=self.barb_color)
+                        #     gusttotal = gusttotal - 50
+                        while gusttotal >= 10:
+                            start = (S12, barend)
+                            end = (S12 + triheight, barend + slant)
+                            wd.line([start, end], width=barbwidth, fill="red")
+                            barend = barend - barstep
+                            gusttotal = gusttotal - 10
+                        # Draw short bar for 5kn
+                        while gusttotal >= 5:
+                            start = (S12, barend)
+                            end = (S12 + triheight / 2, barend + slant / 2)
+                            wd.line([start, end], width=barbwidth, fill="red")
+                            barend = barend - barstep
+                            gusttotal = gusttotal - 5
+                            has_half_barb = True
 
                 if direction is not None:
                     direction = steps * round(direction / steps)
@@ -414,7 +461,8 @@ class WeatherStationPlot(WeatherData):
                     f = -int(15 * PLOT_SIZE / 32)  # up/down, y
                     wind_image = wind_image.transform(image.size, Image.AFFINE, (a, b, c, d, e, f))
 
-            if gust is not None:
+            if gust is not None and add_gust_speed:
+                # Add gust speed at end of barb
                 text = f"{round(gust):3d}"
                 pd(f"draw_wind_barbs: gust: {gust}, {text}")
                 if direction is not None:
@@ -500,7 +548,7 @@ class WeatherStationPlot(WeatherData):
             press = station_plot_data["obs_utc"]
             if press is None:
                 return
-            text = press.strftime("%H:%M")
+            text = press.strftime("%H:%Mz")
             pd(f"draw_obs_utc: {press.isoformat()}, {text}")
             draw.text(
                 cell_center(5, 4),
@@ -656,7 +704,7 @@ class WeatherStationPlot(WeatherData):
         #
         # left:
         def pd(s):
-            logger.debug("?" * 30 + s)
+            # logger.debug("?" * 30 + s)
             pass
 
         def value_of(s):
@@ -716,7 +764,7 @@ class WeatherStationPlot(WeatherData):
                 return None
             covertxt = cloud.type
             pd(f"low cloud: {cloud}, {covertxt}")
-            if covertxt == "NSC":    # 0 8th
+            if covertxt == "NSC":  # 0 8th
                 return 0
             elif covertxt == "FEW":  # 1, 2
                 return 1 / 8
@@ -846,7 +894,7 @@ class WeatherStationPlot(WeatherData):
         else:
             no = "" if self.has_trend() else "no "
             logger.info(f"METAR: {self.metar.raw}, utc={self.metar.data.time.dt}, has {no}trend")
-            pprint(self.metar.data)
+            # pprint(self.metar.data)
             station_plot_data = {
                 "temperature": get_plot_temperature(),
                 "visibility": get_plot_visibility(),

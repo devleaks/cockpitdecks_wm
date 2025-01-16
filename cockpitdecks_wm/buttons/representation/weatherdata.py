@@ -2,11 +2,10 @@
 # Base class for representations that fetches METAR and TAF data periodically.
 #
 import logging
-from datetime import datetime, date
+from datetime import datetime
 
 # these packages have better METAR/TAF collection and exposure
 from avwx import Station, Metar, Taf
-from suntime import Sun
 
 # these packages have better summary/description of decoded METAR/TAF
 from metar import Metar as MetarDesc
@@ -14,7 +13,6 @@ import pytaf
 
 from cockpitdecks.resources.geo import distance
 from cockpitdecks.simulator import SimulatorVariable, SimulatorVariableListener
-
 from cockpitdecks.buttons.representation.draw_animation import DrawAnimation
 
 
@@ -59,7 +57,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
 
         # Working variables
         self.station: Station | None = None
-        self.sun: Sun | None = None
 
         self.metar: Metar | None = None
         self.previous_metars = []
@@ -69,6 +66,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
         self.auto = False
 
         self.weather_icon: str | None = None
+        self.weather_icon_factory = None
         self.update_position = False
 
         self.icao_dataref_path = button._config.get("string-dataref")
@@ -111,7 +109,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
             self.update_position = True  # will be updated
         self.station = Station.from_icao(icao)
         if self.station is not None:
-            self.sun = Sun(self.station.latitude, self.station.longitude)
             self.button._config["label"] = icao
             if self.metar is not None and self.metar.data is not None:
                 logger.debug(f"data for {self.station.icao}")
@@ -125,7 +122,8 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 logger.debug(f"dew point {self.metar.data.dewpoint.value}")
             else:
                 logger.debug(f"no metar for {self.station.icao}")
-            self.weather_icon = self.select_weather_icon()
+            if self.weather_icon_factory is not None:
+                self.weather_icon = self.weather_icon_factory.select_weather_icon(metar=self.metar, station=self.station)
             logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={self._last_updated}")
         self._inited = True
 
@@ -163,8 +161,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
         if self.station is not None and icao == self.station.icao:  # same station
             return
         self.station = Station.from_icao(icao)
-        if self.station is not None:
-            self.sun = Sun(self.station.latitude, self.station.longitude)
         self.button._config["label"] = icao
 
         # invalidate previous values
@@ -173,7 +169,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
         self.update(force=True)
 
     def get_image_for_icon(self):
-        raise NotImplemented("weather data base class has no representation")
+        raise NotImplementedError
 
     # #############################################
     # Metar update and utility function
@@ -277,14 +273,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
             logger.info(f"station {self.station.icao}, Metar fetched, unchanged")
         return updated
 
-    def is_metar_valid(self, metar: str) -> bool:
-        try:
-            m = Metar.from_report(report=metar, issued=date.today())
-            return True
-        except:
-            logger.warning(f"invalid metar {metar}", exc_info=True)
-        return False
-
     def update(self, force: bool = False) -> bool:
         """
         Creates or updates Metar. Call to avwx may fail, so it is wrapped into try/except block
@@ -312,7 +300,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 self.station = new_station
                 updated = self.update_metar(create=True)
                 updated = True  # force
-                self.sun = Sun(self.station.latitude, self.station.longitude)
                 self.button._config["label"] = new_station.icao
                 logger.info(f"UPDATED: new station {self.station.icao}")
             except:
@@ -324,7 +311,6 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 self.station = new_station
                 updated = self.update_metar(create=True)
                 updated = True  # force
-                self.sun = Sun(self.station.latitude, self.station.longitude)
                 self.button._config["label"] = new_station.icao
                 logger.info(f"UPDATED: station changed from {old_station} to {self.station.icao}")
             except:
@@ -372,40 +358,47 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 logger.debug(f"dew point {self.metar.data.dewpoint.value}")
             else:
                 logger.debug(f"no metar data for {self.station.icao}")
-            self.weather_icon = self.select_weather_icon()
+            if self.weather_icon_factory is not None:
+                self.weather_icon = self.weather_icon_factory.select_weather_icon(metar=self.metar, station=self.station)
             logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={updated}")
             self.inc("real update")
 
         return updated
 
     def print(self):
+        if self.show is None:
+            return
+
         # Print current situation
-        if self.has_metar("raw") and self.show == "nice":
-            obs = MetarDesc.Metar(self.metar.raw)
-            logger.info(f"Current:\n{obs.string()}")
-        elif self.has_metar("summary"):
-            logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
+        if not self.has_metar("raw"):
+            logger.warning(f"no METAR to print")
+        else:
+            if self.show in ["nice"]:
+                obs = MetarDesc.Metar(self.metar.raw)
+                logger.info(f"Current:\n{obs.string()}")
+            elif self.show in ["metar", "both"]:
+                logger.info(f"Current:\n{'\n'.join(self.metar.summary.split(','))}")
 
         # Print forecast
-        taf = self.taf if self.taf is not None else Taf(self.station.icao)
-        if taf is not None:
-            taf_updated = taf.update()
-            if taf_updated and hasattr(taf, "summary"):
-                if self.show in ["nice", "taf"]:
-                    taf_text = pytaf.Decoder(pytaf.TAF(taf.raw)).decode_taf()
-                    # Split TAF in blocks of forecasts
-                    forecast = []
-                    prevision = []
-                    for line in taf_text.split("\n"):
-                        if len(line.strip()) > 0:
-                            prevision.append(line)
-                        else:
-                            forecast.append(prevision)
-                            prevision = []
-                    # logger.info(f"Forecast:\n{taf_text}")
-                    logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
+        if self.taf is None or not hasattr(self.taf, "summary"):
+            logger.warning(f"no TAF to print")
+            return
+
+        if self.show in ["nice"]:
+            taf_text = pytaf.Decoder(pytaf.TAF(self.taf.raw)).decode_taf()
+            # Split TAF in blocks of forecasts
+            forecast = []
+            prevision = []
+            for line in taf_text.split("\n"):
+                if len(line.strip()) > 0:
+                    prevision.append(line)
                 else:
-                    logger.info(f"Forecast:\n{'\n'.join(taf.speech.split('.'))}")
+                    forecast.append(prevision)
+                    prevision = []
+            # logger.info(f"Forecast:\n{taf_text}")
+            logger.info(f"Forecast:\n{'\n'.join(['\n'.join(t) for t in forecast])}")
+        elif self.show in ["taf", "both"]:
+            logger.info(f"Forecast:\n{'\n'.join(self.taf.speech.split('.'))}")
 
     # Time-related Metars
     # Past
@@ -427,6 +420,3 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 return False
             return last[:4] == self.metar.raw[:4]  # same station
         return False
-
-    def select_weather_icon(self, at_random: bool = False):
-        return None
