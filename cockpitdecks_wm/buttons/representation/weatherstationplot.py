@@ -64,7 +64,7 @@ class WeatherStationPlot(WeatherData):
 
         if self._busy_updating:
             logger.info(f"..updating in progress..")
-            return
+            return None
         self._busy_updating = True
         logger.debug("updating..")
 
@@ -78,9 +78,9 @@ class WeatherStationPlot(WeatherData):
 
         if not self.has_metar():
             logger.warning(f"no metar")
-            self._cache = image
+            self._cache = image  # empty transparent image
             self._busy_updating = False
-            return self._cache
+            return self._cache  # may be should return None, to present a no-op icon?
 
         draw = ImageDraw.Draw(image)
 
@@ -127,19 +127,20 @@ class WeatherStationPlot(WeatherData):
             )
 
         def draw_flight_rules():
-            vis = station_plot_data["flight_rules"]
-            if vis is None:
-                return
-            text = vis
-            pd(f"draw_visibility: {vis}, {text}")
-            draw.text(
-                cell_center(5, 1),
-                text=text,
-                font=textfont,
-                anchor="mm",
-                align="center",
-                fill=self.text_color,
-            )
+            return
+            # vis = station_plot_data["flight_rules"]
+            # if vis is None:
+            #     return
+            # text = vis
+            # pd(f"draw_visibility: {vis}, {text}")
+            # draw.text(
+            #     cell_center(5, 1),
+            #     text=text,
+            #     font=textfont,
+            #     anchor="mm",
+            #     align="center",
+            #     fill=self.text_color,
+            # )
 
         def draw_visibility():
             vis = station_plot_data["visibility"]
@@ -360,7 +361,7 @@ class WeatherStationPlot(WeatherData):
             wd = ImageDraw.Draw(wind_image)
 
             numbars = 8
-            barbwidth = 3
+            barbwidth = 6
             barlength = int(PLOT_SIZE / 3)
             slant = int(PLOT_SIZE / 32)
             barstep = int(barlength / numbars)
@@ -449,7 +450,7 @@ class WeatherStationPlot(WeatherData):
                     wind_image = wind_image.rotate(angle=180 - direction)
                 else:
                     if variable:
-                        logger.warning("wind has variable direction, no directional plot")
+                        logger.info("wind has variable direction, no directional plot")
                     wind_image = wind_image.rotate(angle=90)
                     # Move windbar out of drawing (bottom)
                     a = 1
@@ -668,7 +669,8 @@ class WeatherStationPlot(WeatherData):
     # Time-related Metars
     # Past
     def get_clouds_at(self, alt: str) -> list:
-        clouds = self.metar.data.clouds
+        clouds = list(filter(lambda c: c.base is not None, self.metar.data.clouds))
+        # clouds = self.metar.data.clouds
         if clouds is None or len(clouds) == 0:
             return []
         altmin = 0
@@ -785,7 +787,7 @@ class WeatherStationPlot(WeatherData):
         def get_plot_wind():
             variable = len(self.metar.data.wind_variable_direction) > 1
             if variable:
-                logger.warning(
+                logger.info(
                     f"wind variable, speed {value_of(self.metar.data.wind_speed)}, directions {', '.join([str(n.value) for n in self.metar.data.wind_variable_direction])}"
                 )
             return (value_of(self.metar.data.wind_speed), value_of(self.metar.data.wind_direction), value_of(self.metar.data.wind_gust), variable)
@@ -821,7 +823,7 @@ class WeatherStationPlot(WeatherData):
                 return (None, None)
             # Precipitation type past hours
             # to be done
-            return (None, 2.54 * int(precip[0])/100)  # P0123 is in 1/100th of inch
+            return (None, 2.54 * int(precip[0]) / 100)  # P0123 is in 1/100th of inch
 
         def get_plot_six_hour_precipitation_forewast():
             return (None, None)
@@ -897,7 +899,7 @@ class WeatherStationPlot(WeatherData):
             }
         else:
             no = "" if self.has_trend() else "no "
-            logger.info(f"METAR: {self.metar.raw}, utc={self.metar.data.time.dt}, has {no}trend")
+            # logger.info(f"METAR: {self.metar.raw}, utc={self.metar.data.time.dt}, has {no}trend")
             # pprint(self.metar.data)
             station_plot_data = {
                 "temperature": get_plot_temperature(),

@@ -15,7 +15,7 @@ from cockpitdecks.resources.geo import distance
 from cockpitdecks.simulator import SimulatorVariable, SimulatorVariableListener
 from cockpitdecks.buttons.representation.draw_animation import DrawAnimation
 
-from .weathericon import WeatherIcon
+from cockpitdecks.resources.weathericon import WeatherIcon
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
@@ -65,6 +65,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
         self.previous_tafs = []
         self.show = self.weather.get("summary")
         self.auto = False
+        self.imperial = False  # currently unused, reminder to think about it (METAR differ in US/rest of the world)
 
         self.update_position = False
 
@@ -265,8 +266,8 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
             if before is not None:
                 self.previous_metars.append(before)
                 self.previous_tafs.append(self.taf.raw)
-            logger.info(f"station {self.station.icao}, Metar updated")
-            logger.info(f"update: {before} -> {self.metar.raw}")
+            # logger.debug(f"station {self.station.icao}, Metar updated")
+            logger.info(f"station {self.station.icao}: {before} -> {self.metar.raw}")
             if self.show is not None:
                 self.print()
         else:
@@ -301,7 +302,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 updated = self.update_metar(create=True)
                 updated = True  # force
                 self.button._config["label"] = new_station.icao
-                logger.info(f"UPDATED: new station {self.station.icao}")
+                logger.info(f"new station {self.station.icao}")
             except:
                 self.metar = None
                 logger.warning(f"new station {new_station.icao}: Metar not created", exc_info=True)
@@ -312,7 +313,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 updated = self.update_metar(create=True)
                 updated = True  # force
                 self.button._config["label"] = new_station.icao
-                logger.info(f"UPDATED: station changed from {old_station} to {self.station.icao}")
+                logger.info(f"station changed from {old_station} to {self.station.icao}")
             except:
                 self.metar = None
                 logger.warning(f"change station to {new_station.icao}: Metar not created", exc_info=True)
@@ -320,7 +321,7 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
             try:
                 updated = self.update_metar(create=True)
                 updated = True  # force
-                logger.info(f"UPDATED: station {self.station.icao}, first Metar")
+                logger.debug(f"station {self.station.icao}, first Metar")
             except:
                 self.metar = None
                 logger.warning(
@@ -360,9 +361,9 @@ class WeatherData(DrawAnimation, SimulatorVariableListener):
                 logger.debug(f"no metar data for {self.station.icao}")
             if self.weather_icon_factory is not None:
                 self.weather_icon = self.weather_icon_factory.select_weather_icon(metar=self.metar, station=self.station)
-                print(">>>>>>>>>> set icon", self.weather_icon)
-            else:
-                print(">>>>>>>>>> NO FACTORY")
+            #     print(">>>>>>>>>> set icon", self.weather_icon)
+            # else:
+            #     print(">>>>>>>>>> NO FACTORY")
             logger.debug(f"Metar updated for {self.station.icao}, icon={self.weather_icon}, updated={updated}")
             self.inc("real update")
 

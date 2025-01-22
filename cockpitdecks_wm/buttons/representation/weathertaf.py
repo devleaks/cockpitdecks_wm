@@ -43,7 +43,12 @@ class WeatherTafIcon(WeatherMetarIcon):
             else:
                 forecast.append(prevision)
                 prevision = []
-        retval = [f"Forecast page {bv % len(forecast)} / {len(forecast)}"] + forecast[bv % len(forecast)]
+        while len(forecast[-1]) == 0:
+            forecast = forecast[:-1]
+
+        a = bv % len(forecast)
+        # s = "●" if len(forecast) < 2 else "o"*a+"●"+"o"*(len(forecast)-a-1)  # ●○
+        retval = [f"Forecast page {1 + a} / {len(forecast)}"] + forecast[a]
         return reduce(lambda x, t: x + wrap(t, width=21), retval, [])
 
     def get_image_for_icon(self):
