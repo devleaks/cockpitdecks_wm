@@ -161,3 +161,4 @@ cython_debug/
 cockpitdecks_ext/decks/.DS_Store
 .DS_Store
 cockpitdecks_ext/decks/.DS_Store
+cockpitdecks_wm/resources/ogimet_cache.sqlite
