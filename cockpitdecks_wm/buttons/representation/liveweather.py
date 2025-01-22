@@ -28,7 +28,6 @@ class LiveWeatherIcon(WeatherBaseIcon):
         self.set_label(icao)
         self.weather_data = WeatherAVWX(icao=icao, taf=taf)
         self.weather_data.add_listener(self)
-        print("************************************ WEATHER DATA SET", icao)
 
     def updated(self) -> bool:
         return self.button.has_changed()  # to cycle pages

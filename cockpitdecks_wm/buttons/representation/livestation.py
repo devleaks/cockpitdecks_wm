@@ -10,15 +10,13 @@ logger = logging.getLogger(__name__)
 # logger.setLevel(SPAM_LEVEL)
 # logger.setLevel(logging.DEBUG)
 
-FLIGHT_RULES = {"VFR": "green", "MVFR": "blue", "IFR": "red", "LIFR": "purple"}
-
 
 class LiveStationPlot(WeatherStationPlot):
     """
     Depends on avwx-engine
     """
 
-    REPRESENTATION_NAME = "live-station"
+    REPRESENTATION_NAME = "live-station-plot"
 
     def __init__(self, button: "Button"):
         WeatherStationPlot.__init__(self, button=button)

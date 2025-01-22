@@ -109,6 +109,7 @@ class WeatherAVWX(WeatherData):
         if len(self._forecast) == 0:
             taf_text = pytaf.Decoder(pytaf.TAF(self.weather.raw)).decode_taf()
             # Split TAF in blocks of forecasts
+            # print(taf_text)
             forecast = []
             prevision = []
             for line in taf_text.split("\n"):
@@ -145,10 +146,12 @@ class WeatherAVWX(WeatherData):
 # For testing:
 # $ python cockpitdecks_wm/buttons/representation/ogimet.py
 if __name__ == "__main__":
-    w = WeatherAVWX(icao="EDDM", taf=False)
+    w = WeatherAVWX(icao="OTHH", taf=True)
     print(w.weather.raw)
     if type(w.weather) is Taf:
         print("\n".join(w.weather.summary))
+        print("---")
+        print("\n".join(w.get_forecast_page(0)))
     else:
         print("\n".join(w.weather.summary.split(", ")))
     # w.update_weather()
