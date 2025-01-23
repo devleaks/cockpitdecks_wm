@@ -107,7 +107,7 @@ class WeatherAVWX(WeatherData):
                 if self._weather.station == self.station:  # just need to update metar
                     logger.debug("station not changed")
                     if self._weather.update():
-                        logger.debug("weather updated")
+                        logger.info(f"weather updated: {self._weather.raw}")
                     return True
                 else:
                     logger.debug("station changed")
@@ -120,6 +120,8 @@ class WeatherAVWX(WeatherData):
                 self._weather = Metar(self.station.icao)
             updated = self._weather.update()
             logger.debug(f"weather updated: {updated}")
+            if updated:
+                logger.info(f"weather updated: {self._weather.raw}")
             return updated
         else:
             logger.debug("weather does not need updating")
