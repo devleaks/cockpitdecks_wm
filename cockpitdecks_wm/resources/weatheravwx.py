@@ -14,7 +14,7 @@ import pytaf
 from cockpitdecks.resources.weather import WeatherData
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 
 
 class WeatherAVWX(WeatherData):
