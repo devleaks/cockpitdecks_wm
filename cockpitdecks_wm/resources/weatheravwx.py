@@ -3,7 +3,7 @@ A METAR is a weather situation at a named location, usually an airport.
 """
 
 import logging
-from typing import List
+from typing import List, Any
 from datetime import datetime, timezone
 from functools import reduce
 from textwrap import wrap
@@ -14,7 +14,7 @@ import pytaf
 from cockpitdecks.resources.weather import WeatherData
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 class WeatherAVWX(WeatherData):
@@ -30,8 +30,8 @@ class WeatherAVWX(WeatherData):
         self.taf = taf
         self._forecast = []
 
-        self.auto = False
         self.imperial = False  # currently unused, reminder to think about it (METAR differ in US/rest of the world)
+        # can be guessed from METAR pressure indicator: Q1013 or A2992.
 
         self.update_time = 10 * 60  # secs
 
@@ -43,9 +43,26 @@ class WeatherAVWX(WeatherData):
     def init(self):
         self.station = Station.from_icao(self.icao)
         if self.station is not None:
-            self.update_weather()
+            if self.update_weather():
+                self.weather_changed()
         else:
             logger.warning(f"invalid or non-existant weather station {self.icao}")
+
+    @property
+    def label(self):
+        return self.station.icao if self.station is not None else "Weather"
+
+    def set_station(self, station: Any):
+        if type(station) is Station:
+            logger.debug(f"new station {station.icao} ({type(station)})")
+            self.station = station
+            return
+        newstation = Station.from_icao(ident=station)
+        if newstation is not None:
+            logger.debug(f"new station {newstation.icao} ({type(newstation)})")
+            self.station = newstation
+            return
+        logger.warning(f"could not change to station {station} ({type(station)})")
 
     def check_station(self) -> bool:
         """Returns True if station is not defined or is different from weather stattion."""
@@ -55,7 +72,8 @@ class WeatherAVWX(WeatherData):
 
     def station_changed(self):
         """Executed when station has changed."""
-        self.update_weather()
+        if self.update_weather():
+            self.weather_changed()
 
     def check_weather(self) -> bool:
         """Check whether weather needs updating.
@@ -87,18 +105,22 @@ class WeatherAVWX(WeatherData):
             # 1. Weather data update if weather data is available and station has not changed
             if hasattr(self, "_weather") and self._weather is not None:
                 if self._weather.station == self.station:  # just need to update metar
+                    logger.debug("station not changed")
                     if self._weather.update():
-                        self.weather_changed()
+                        logger.debug("weather updated")
                     return True
+                else:
+                    logger.debug("station changed")
             # 2. New weather data if no weather data or station has changed.
+            logger.debug("new weather..")
             if self.taf:
                 self._weather = Taf(self.station.icao)
                 self._forecast = []
             else:
                 self._weather = Metar(self.station.icao)
             updated = self._weather.update()
-            self.weather_changed()
-            return True  # updated
+            logger.debug(f"weather updated: {updated}")
+            return updated
         else:
             logger.debug("weather does not need updating")
         return False

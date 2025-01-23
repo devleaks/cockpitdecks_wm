@@ -55,6 +55,16 @@ class WeatherOGIMET(WeatherData):
 
         self.init(self.moment)
 
+    def set_station(self, station: Any):
+        if type(station) is Station:
+            self.station = station
+            return
+        newstation = Station.from_icao(ident=station)
+        if newstation is not None:
+            self.station = newstation
+            return
+        logger.warning(f"could not find station {station} ({type(station)})")
+
     def station_changed(self):
         logger.warning("OGIMET station never changes")
 
@@ -74,7 +84,7 @@ class WeatherOGIMET(WeatherData):
 
     def init(self, moment: datetime):
         if self.check_station():
-            station = Station.from_icao(self.icao)
+            station = Station.from_icao(ident=self.icao)
             if station is not None:
                 self.station = station  # setter calls station_changed()
                 if self.check_weather():
