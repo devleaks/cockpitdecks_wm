@@ -43,9 +43,9 @@ class WeatherAVWX(WeatherData):
         self._raw: str
 
         # Debugging values
-        self._check_freq = 10  # seconds
-        self._station_check_freq = 60  # seconds
-        self._weather_check_freq = 30  # seconds
+        # self._check_freq = 10  # seconds
+        # self._station_check_freq = 60  # seconds
+        # self._weather_check_freq = 30  # seconds
 
         self.init()
 
