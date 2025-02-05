@@ -41,5 +41,5 @@ class LiveWeatherIcon(WeatherBaseIcon):
             return self.weather_data.weather.summary.split(",")  # ~ 6-7 short lines
         # TAF
         page = self.button.value
-        page = 0 if page is None else int(page)
+        page = 0 if page is None else int(float(page))
         return self.weather_data.get_forecast_page(page=page, width=self.width)
