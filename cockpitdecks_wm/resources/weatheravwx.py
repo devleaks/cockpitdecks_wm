@@ -83,7 +83,7 @@ class WeatherAVWX(WeatherData):
             self.station_changed()
             return
 
-        logger.debug(f"station not new {station} ({type(station)})")
+        logger.debug(f"station unchanged {station} ({type(station)})")
 
     def check_station(self) -> bool:
         """Returns True if station is not defined or is different from weather stattion."""
