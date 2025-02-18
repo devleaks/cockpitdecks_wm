@@ -50,12 +50,7 @@ class WeatherAVWX(WeatherData):
         self.init()
 
     def init(self):
-        self.station = Station.from_icao(self.icao)
-        if self.station is not None:
-            if self.update_weather():
-                self.weather_changed()
-        else:
-            logger.warning(f"invalid or non-existant weather station {self.icao}")
+        self.set_station(station=self.icao)
 
     # ################################################
     # WeatherData Interface
@@ -65,16 +60,30 @@ class WeatherAVWX(WeatherData):
         return self.station.icao if self.station is not None else "Weather"
 
     def set_station(self, station: Any):
-        if type(station) is Station:
-            logger.debug(f"new station {station.icao} ({type(station)})")
-            self.station = station
+        if type(station) not in [str, Station]:
+            logger.warning(f"invalid station {station} ({type(station)})")
             return
-        newstation = Station.from_icao(ident=station)
-        if newstation is not None:
-            logger.debug(f"new station {newstation.icao} ({type(newstation)})")
-            self.station = newstation
+        old_station = self.station
+        new_station = station
+        if type(station) is str:
+            new_station = Station.from_icao(ident=station)
+
+        if new_station is None:
+            logger.warning(f"station not found ({station})")
             return
-        logger.warning(f"could not change to station {station} ({type(station)})")
+
+        if old_station is None:
+            logger.debug(f"new station {new_station.icao}")
+            self.station = new_station
+            self.station_changed()
+            return
+        elif old_station.icao != new_station.icao:
+            logger.debug(f"update station {old_station.icao} -> {new_station.icao}")
+            self.station = new_station
+            self.station_changed()
+            return
+
+        logger.debug(f"station not new {station} ({type(station)})")
 
     def check_station(self) -> bool:
         """Returns True if station is not defined or is different from weather stattion."""
