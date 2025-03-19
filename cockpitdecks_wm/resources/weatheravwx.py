@@ -185,8 +185,7 @@ class WeatherAVWX(WeatherData):
                 forecast = forecast[:-1]
             self._forecast = forecast
         l = len(self._forecast)
-        a = page % l
-        # s = "●" if len(forecast) < 2 else "o"*a+"●"+"o"*(len(forecast)-a-1)  # ●○
+        a = int(page % l)
         text = [f"Forecast page {1 + a} / {l}"] + self._forecast[a]
         return reduce(lambda x, t: x + wrap(t, width=width), text, [])
 

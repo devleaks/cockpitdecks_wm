@@ -40,11 +40,4 @@ class LiveWeatherIcon(WeatherBaseIcon):
         if not self.weather_data.taf:
             return self.weather_data.weather.summary.split(",")  # ~ 6-7 short lines
         # TAF
-        page = 0
-        bv = self.button.value
-        try:
-            page = int(float(bv))
-        except:
-            page = 0
-            logger.warning(f"{self.name}: button value is not a number {bv}, cannot change page")
-        return self.weather_data.get_forecast_page(page=page, width=self.width)
+        return self.weather_data.get_forecast_page(page=self.get_activation_count(), width=self.width)
