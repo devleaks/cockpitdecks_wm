@@ -26,8 +26,9 @@ class LiveWeatherIcon(WeatherBaseIcon):
         taf = self.weather.get("taf", False)
         self.width = self.weather.get("width", 21)
         self.set_label(icao)
-        self.weather_data = WeatherAVWX(icao=icao, taf=taf)
+        self.weather_data = WeatherAVWX(icao=icao, taf=taf, client=button.name)
         self.weather_data.add_listener(self)
+        self.always_render = True
 
     def updated(self) -> bool:
         return self.button.has_changed()  # to cycle pages

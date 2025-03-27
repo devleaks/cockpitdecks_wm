@@ -22,5 +22,5 @@ class LiveStationPlot(WeatherStationPlot):
         WeatherStationPlot.__init__(self, button=button)
         icao = button._config.get(self.REPRESENTATION_NAME).get("station", self.DEFAULT_STATION)
         self.button = button
-        self.weather_data = WeatherAVWX(icao=icao)
+        self.weather_data = WeatherAVWX(icao=icao, client=button.name)
         self.weather_data.add_listener(self)

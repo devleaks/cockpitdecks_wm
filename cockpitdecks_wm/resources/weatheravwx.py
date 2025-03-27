@@ -16,6 +16,8 @@ from cockpitdecks.resources.weather import WeatherData
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 def nowutc() -> datetime:
     return datetime.now(timezone.utc)
@@ -23,10 +25,11 @@ def nowutc() -> datetime:
 
 class WeatherAVWX(WeatherData):
 
-    def __init__(self, icao: str, taf: bool = False):
+    def __init__(self, icao: str, taf: bool = False, client: str = ""):
         WeatherData.__init__(self, name=icao, config={})
         self._created = datetime.now()
         self._updated: datetime
+        self.client = client
 
         self.previous_weather = []
 
@@ -114,30 +117,32 @@ class WeatherAVWX(WeatherData):
     # Utility functions
     #
     def update_weather(self) -> bool:
+        winfo = " TAF" if self.taf else " METAR"  # ({winfo})
+        client = "" if self.client is None else f"{self.client}: "
         # 1. Weather data update if weather data is available and station has not changed
         if hasattr(self, "_weather") and self._weather is not None:
             if self._weather.station == self.station:  # just need to update metar
                 logger.debug("station not changed")
                 if self._weather.update():
-                    logger.info(f"weather checked, changed: {self._weather.raw}")
+                    logger.info(f"{client}weather checked,{winfo} changed: {self._weather.raw}")
                     self._weather_last_checked = nowutc()
                     return True
-                logger.info("weather checked, unchanged")
+                logger.debug(f"weather checked,{winfo} unchanged")
                 return False
             else:
-                logger.debug("station changed, creating new weather")
+                logger.info(f"{client}station changed, fetching new{winfo}")
         # 2. New weather data if no weather data or station has changed.
-        logger.debug("new weather..")
+        logger.debug(f"new weather({winfo})..")
         if self.taf:
             self._weather = Taf(self.station.icao)
             self._forecast = []
         else:
             self._weather = Metar(self.station.icao)
         updated = self._weather.update()
-        logger.debug(f"weather created: {updated}")
+        logger.debug(f"..weather created: {updated}")
         if updated:
             self._weather_last_checked = nowutc()
-            logger.info(f"weather updated: {self._weather.raw}")
+            logger.info(f"{client}..weather updated{winfo}: {self._weather.raw}")
         return updated
 
     def check_weather(self) -> bool:
